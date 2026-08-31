@@ -217,6 +217,41 @@ Two cautions from the BLAKE2b record:
 - A hash speedup caps out at the share of runtime the hash occupies. If
   hashing is a fifth of a workload, a 2x hash is a 1.2x workload at best.
 
+### Code-shape changes that were tried and rejected
+
+Measured on an Apple M4 Pro, prefix-digest shape, median of 9 runs of 400k
+digests. A digest costs 98 ns, of which the single block compression is 79%
+and the state copy 2%; the compression is where any real gain has to come
+from.
+
+| change | result |
+|---|---|
+| `#pragma clang loop unroll(full)` on the 12-round loop | **27% slower** (98 -> 114 ns; stack traffic 0 -> 398) |
+| the same plus `__builtin_assume_aligned` on the block | 27% slower |
+| hoisting the message-schedule row out of the round | no change |
+| finalizing without copying the whole state | ~1%, inside noise |
+| column-major working vector | no change (95.2-96.7 ns either way) |
+
+Unrolling is the notable one, and the reason is register pressure, not code
+size. The compiled body grows from 996 bytes to 8,912 — still far inside this
+core's 192 KB L1 instruction cache, so instruction fetch is not the problem.
+What changes is spilling: the rolled loop has **no** stack traffic at all,
+while the unrolled body has 398 stack loads and stores. The working vector is
+sixteen 64-bit words plus sixteen message words, already more than the 31
+general-purpose registers; the rolled loop keeps one round's values live at a
+time and fits, while the unrolled body presents the allocator with twelve
+rounds' worth at once and it spills.
+
+Since the rolled loop already spills nothing, layout changes aimed at the
+allocator have nothing to recover — which is why the column-major experiment
+measured no difference.
+
+This matches `-O3` measuring slower than `-O2` on the same code.
+
+The lesson for a replacement: gains come from doing fewer or wider operations,
+not from unrolling or from alignment hints. That means SIMD across independent
+messages, or threads, not a differently-shaped scalar loop.
+
 ### Reading a performance number
 
 A figure without its machine is an anecdote. The same code changes rank

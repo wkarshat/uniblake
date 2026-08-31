@@ -24,15 +24,10 @@
  * Finalization is the exception: ub_final sets t and f itself and passes a
  * single already-accounted block, so it calls the raw body via nblocks = 0
  * semantics -- see ub_compress_final. */
-#ifdef UB_KERNEL_RUNTIME
-void ub_compress_scalar(struct ub_state *S, const uint8_t *blocks, size_t nblocks)
-#else
-void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks)
-#endif
-{
-  for (size_t n = 0; n < nblocks; ++n) {
-    S->t[0] += UB_BLOCKBYTES; S->t[1] += (S->t[0] < UB_BLOCKBYTES);
-    const uint8_t *block = blocks + n * UB_BLOCKBYTES;
+/* One block, counter and flags already set by the caller. Both entry points
+ * below build on this, so the round code exists once. */
+static void compress_block(struct ub_state *S, const uint8_t *block) {
+  {
     uint64_t m[16], v[16];
     for (int i = 0; i < 16; ++i) m[i] = ub_load64(block + i * 8);
     for (int i = 0; i < 8;  ++i) v[i] = S->h[i];
@@ -55,12 +50,23 @@ void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks)
   }
 }
 
+#ifdef UB_KERNEL_RUNTIME
+void ub_compress_scalar(struct ub_state *S, const uint8_t *blocks, size_t nblocks)
+#else
+void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks)
+#endif
+{
+  for (size_t n = 0; n < nblocks; ++n) {
+    S->t[0] += UB_BLOCKBYTES; S->t[1] += (S->t[0] < UB_BLOCKBYTES);
+    compress_block(S, blocks + n * UB_BLOCKBYTES);
+  }
+}
+
 /* One block, counter and flags already set by the caller (finalization). */
+/* Finalization: the counter and flags are the caller's, so this compresses
+ * directly instead of decrementing t, calling ub_compress, and restoring it. */
 void ub_compress_final(struct ub_state *S, const uint8_t *block) {
-  uint64_t save0 = S->t[0], save1 = S->t[1];
-  S->t[0] -= UB_BLOCKBYTES; S->t[1] -= (save0 < UB_BLOCKBYTES);
-  ub_compress(S, block, 1);
-  S->t[0] = save0; S->t[1] = save1;
+  compress_block(S, block);
 }
 
 #ifdef UB_KERNEL_RUNTIME

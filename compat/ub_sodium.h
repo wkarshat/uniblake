@@ -74,6 +74,12 @@ static inline int
 crypto_generichash_blake2b(unsigned char *out, size_t outlen,
                            const unsigned char *in, unsigned long long inlen,
                            const unsigned char *key, size_t keylen)
-{ return ub_hash(out, outlen, in, (size_t)inlen, key, keylen); }
+{
+  /* libsodium REJECTS outlen above 64, and 0; ub_hash treats outcap as a
+   * buffer capacity and clamps. Both are defensible, but a shimmed call site
+   * must see libsodium's answer, so reject here. */
+  if (outlen == 0 || outlen > UB_OUTBYTES) return -1;
+  return ub_hash(out, outlen, in, (size_t)inlen, key, keylen);
+}
 
 #endif

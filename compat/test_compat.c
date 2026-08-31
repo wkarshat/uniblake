@@ -48,6 +48,16 @@ int main(void){
     crypto_generichash_blake2b_final(&s,b,50);
     ok(memcmp(a,b,50)==0,"keyed+salt+personal",(long)kl);
   }
+  /* Out-of-range outlen must give libsodium's answer, not uniblake's:
+   * libsodium rejects, ub_hash clamps to 64. */
+  { unsigned char big[200];
+    ok(crypto_generichash_blake2b(big,100,in,3,NULL,0)==-1,
+       "one-shot rejects outlen 100 as libsodium does",0);
+    ok(crypto_generichash_blake2b(big,0,in,3,NULL,0)==-1,
+       "one-shot rejects outlen 0 as libsodium does",0);
+    ok(crypto_generichash_blake2b(big,64,in,3,NULL,0)==0,
+       "one-shot accepts outlen 64",0); }
+
   printf("compat: checks=%d fails=%d -> %s\n",checks,fails,fails?"FAIL":"PASS");
   return fails!=0;
 }
