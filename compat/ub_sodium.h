@@ -39,7 +39,11 @@ crypto_generichash_blake2b_init_salt_personal(ub_state *S,
     return crypto_generichash_blake2b_init(S, key, keylen, outlen);
   /* Before the (uint8_t) cast below: an oversized keylen would truncate to a
    * value ub_init_param accepts (288 -> 32), and the memcpy into the 128-byte
-   * block would then run off the stack. libsodium rejects this too. */
+   * block would then run off the stack. libsodium rejects this too.
+   *
+   * Returns the code bare: ub_err is internal to src/, and this is a
+   * header-only shim, so the handler is not reachable from here. Everything
+   * this file forwards to reports normally -- only this one check is silent. */
   if (keylen > UB_KEYBYTES) return UB_E_ARG;
   ub_param P;
   ub_param_init(&P, outlen);

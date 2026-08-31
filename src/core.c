@@ -124,6 +124,20 @@ int ub_copy(ub_state *dst, const ub_state *src) {
 
 int ub_hash(void *out, size_t outcap, const void *in, size_t inlen,
             const void *key, size_t keylen) {
+  /* Validate here rather than letting the inner calls do it. They would
+   * report under THEIR names -- a caller who wrote ub_hash(out, 0, ...) was
+   * told "ub_init_param: digest_length must be 1..64", naming a function it
+   * never called and a parameter block it cannot see, and a NULL `out` was
+   * reported as "ub_final: NULL state" when the state is internal and fine.
+   * The codes were right; the diagnosis pointed at the wrong argument. */
+  if (!out) return ub_err(UB_E_ARG, __func__, "NULL output");
+  if (inlen && !in) return ub_err(UB_E_ARG, __func__, "NULL input with nonzero inlen");
+  if (outcap == 0) return ub_err(UB_E_ARG, __func__, "outcap 0 names a 0-byte digest");
+  if (keylen) {
+    if (!key) return ub_err(UB_E_ARG, __func__, "NULL key with nonzero keylen");
+    if (keylen > UB_KEYBYTES) return ub_err(UB_E_ARG, __func__, "keylen above 64");
+  }
+
   struct ub_state S;
   int rc = keylen ? ub_init_key(&S, outcap > UB_OUTBYTES ? UB_OUTBYTES : outcap,
                                 key, keylen)

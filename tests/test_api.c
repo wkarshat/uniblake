@@ -123,6 +123,23 @@ int main(void){
     n_reports=0; ub_param_init(NULL,32);
     ok(n_reports==1 && strcmp(last_fn,"ub_param_init")==0, "param_init NULL reports");
 
+    /* ub_hash validates its own arguments instead of letting the inner
+     * init/update/final calls report under THEIR names: a caller who wrote
+     * ub_hash(out, 0, ...) should not be told "ub_init_param", and a NULL
+     * `out` should not be reported as a NULL state. */
+    #define OWNS(call,label) do{                                              \
+        n_reports=0; last_fn[0]=0;                                            \
+        ok((call)==UB_E_ARG,               label " returns");                 \
+        ok(n_reports==1,                   label " reports once");            \
+        ok(strcmp(last_fn,"ub_hash")==0,   label " names ub_hash");           \
+      }while(0)
+    OWNS(ub_hash(out,0,"abc",3,NULL,0),        "hash outcap 0");
+    OWNS(ub_hash(NULL,32,"abc",3,NULL,0),      "hash NULL out");
+    OWNS(ub_hash(out,32,NULL,3,NULL,0),        "hash NULL in");
+    OWNS(ub_hash(out,32,"abc",3,NULL,5),       "hash NULL key");
+    OWNS(ub_hash(out,32,"abc",3,key,100),      "hash keylen 100");
+    #undef OWNS
+
     /* Success stays silent, on the single and the batch path alike. */
     ub_init_param(S,&Q); ub_update(S,pre,140);
     n_reports=0;
