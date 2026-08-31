@@ -10,6 +10,34 @@ weaker constructions. BLAKE2b is the 64-bit variant: 128-byte blocks, digests
 up to 64 bytes. RFC 7693 specifies it, and the reference implementation at
 github.com/BLAKE2/BLAKE2 defines the API most libraries follow.
 
+### Two things called "the reference"
+
+RFC 7693 carries sample code in Appendix A, and the authors maintain a
+separate implementation at github.com/BLAKE2/BLAKE2. They are not the same
+API, and the difference decides what a caller can express.
+
+| | RFC 7693 Appendix A | author reference |
+|---|---|---|
+| init | one call, key always passed | `init`, `init_key`, `init_param` |
+| parameter block | not exposed | `blake2b_param` |
+| salt, personalization | **absent** | present |
+| `update` | returns `void` | returns `int` |
+| `final` | no output capacity | takes capacity |
+| SIMD, tree modes | none | SSE through AVX2, `blake2bp` |
+
+The RFC sample is normative for the *algorithm* and deliberately small — about
+150 lines demonstrating that the specification is implementable. It omits the
+parameter block, so it cannot produce salted or personalized digests at all.
+
+The author reference is what libraries follow: libsodium's
+`crypto_generichash_blake2b_*` and this library both track its names and
+argument order. "The reference implementation", in an argument about API
+shape, means this one.
+
+uniblake follows the author reference for the interface and cites RFC 7693 for
+the algorithm. `compat/ub_rfc.h` adapts the Appendix-A shape for callers that
+have it hard-coded.
+
 Its distinguishing feature is the parameter block — 64 bytes of "what am I
 computing" (digest length, key length, salt, personalization, tree layout)
 mixed into the initial state rather than into the message. Two hashes with

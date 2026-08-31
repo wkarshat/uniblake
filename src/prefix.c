@@ -4,6 +4,9 @@
 
 int ub_prefix_check(const ub_state *S, size_t tailmax) {
   if (!S) return UB_E_ARG;
+  /* The point of this call is to predict what the hashing calls will do, so
+   * it has to reject everything they reject -- including a finalized state. */
+  if (S->f[0] != 0) return UB_E_STATE;
   if (tailmax > UB_BLOCKBYTES) return UB_E_GEOMETRY;
   /* update() is eager, so at most one block is pending. A digest costs one
    * compression exactly when the tail still fits that block. */
@@ -46,8 +49,14 @@ int ub_hash_n(const ub_state *S, size_t tailwidth, uint64_t first, size_t n,
   if (!S || !out) return ub_err(UB_E_ARG, "ub_hash_n", "NULL state or output");
   if (tailwidth != 4 && tailwidth != 8)
     return ub_err(UB_E_ARG, "ub_hash_n", "tailwidth must be 4 or 8");
+  /* Bound `off` BEFORE deriving len from it: `S->outlen - off` is size_t, so
+   * off > outlen underflows to a huge length, and the `off + len` that would
+   * catch it wraps back to exactly outlen and passes. Both checks below are
+   * written as subtractions on the known-good side for that reason. */
+  if (off > S->outlen)
+    return ub_err(UB_E_ARG, "ub_hash_n", "slice outside the digest");
   if (len == 0) len = S->outlen - off;          /* whole digest from off */
-  if (off + len > S->outlen)
+  if (len > S->outlen - off)
     return ub_err(UB_E_ARG, "ub_hash_n", "slice outside the digest");
   if (stride < len)
     return ub_err(UB_E_OUTCAP, "ub_hash_n", "stride below bytes written");

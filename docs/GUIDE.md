@@ -272,13 +272,24 @@ crypto_generichash_blake2b_init_salt_personal(ub_state *S,
     const unsigned char *k, size_t klen, size_t outlen,
     const unsigned char *salt, const unsigned char *personal)
 {
-  ub_param P; memset(&P, 0, sizeof P);
-  P.digest_length = (uint8_t)outlen; P.fanout = 1; P.depth = 1;
-  P.key_length = (uint8_t)klen;
+  if (klen > UB_KEYBYTES) return UB_E_ARG;   /* else the cast below truncates */
+  ub_param P; ub_param_init(&P, outlen);     /* checks outlen; sets fanout/depth */
   if (salt)     memcpy(P.salt, salt, UB_SALTBYTES);
   if (personal) memcpy(P.personal, personal, UB_PERSONALBYTES);
-  int rc = ub_init_param(S, &P);
-  return (rc == 0 && klen) ? ub_update(S, k, klen) : rc;
+  if (klen) {
+    P.key_length = (uint8_t)klen;
+    int rc = ub_init_param(S, &P);
+    if (rc != UB_OK) return rc;
+    /* The key is absorbed as ONE ZERO-PADDED 128-byte block (RFC 7693 §2.9).
+     * Feeding the raw key here instead -- ub_update(S, k, klen) -- sets the
+     * parameter block correctly but produces a wrong digest for every keyed
+     * call, because the padding is part of the hashed message. */
+    unsigned char blk[UB_BLOCKBYTES];
+    memset(blk, 0, sizeof blk);
+    memcpy(blk, k, klen);
+    return ub_update(S, blk, UB_BLOCKBYTES);
+  }
+  return ub_init_param(S, &P);
 }
 
 #define crypto_generichash_blake2b_update  ub_update

@@ -49,22 +49,35 @@ int ub_hash_n(const ub_state *S, size_t tailwidth, uint64_t first, size_t n,
   pthread_t th[UB_THREADS];
   struct span w[UB_THREADS];
   size_t per = n / UB_THREADS, extra = n % UB_THREADS, at = 0;
-  int started = 0;
+  int live[UB_THREADS];
 
+  /* Assign every span BEFORE creating any thread. A failed pthread_create
+   * must not leave later entries unassigned: they would be read below with
+   * garbage n, out and rc -- running spans over a wild pointer and letting a
+   * batch that never produced its digests still return UB_OK. */
   for (int i = 0; i < UB_THREADS; ++i) {
     size_t take = per + (i < (int)extra ? 1 : 0);
     w[i] = (struct span){ S, tailwidth, first + at, take, off, len,
                           (uint8_t *)out + at * stride, stride, UB_OK };
     at += take;
-    if (i == UB_THREADS - 1) { run(&w[i]); break; }   /* caller runs one span */
-    if (pthread_create(&th[i], 0, run, &w[i]) != 0) { w[i].n = 0; break; }
-    started++;
+    live[i] = 0;
   }
-  for (int i = 0; i < started; ++i) pthread_join(th[i], 0);
 
-  /* any span that was never started still has work to do */
-  for (int i = started; i < UB_THREADS - 1; ++i)
-    if (w[i].n) run(&w[i]);
+  /* The caller's own thread runs the last span rather than idling, so it is
+   * never handed to pthread_create. */
+  for (int i = 0; i < UB_THREADS - 1; ++i) {
+    if (w[i].n == 0) continue;
+    if (pthread_create(&th[i], 0, run, &w[i]) == 0) live[i] = 1;
+    /* On failure the span stays unrun and is picked up inline below. */
+  }
+  run(&w[UB_THREADS - 1]);
+
+  for (int i = 0; i < UB_THREADS - 1; ++i)
+    if (live[i]) pthread_join(th[i], 0);
+
+  /* Any span whose thread never started still has work to do. */
+  for (int i = 0; i < UB_THREADS - 1; ++i)
+    if (!live[i] && w[i].n) run(&w[i]);
 
   for (int i = 0; i < UB_THREADS; ++i)
     if (w[i].rc != UB_OK) return w[i].rc;

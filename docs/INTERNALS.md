@@ -168,6 +168,26 @@ Read `S->h`, `S->t`, `S->f`. Write only `S->h` and `S->t`. Leave `S->buf`,
 the caller has already set, so it must **not** advance `S->t`. The shipped
 version wraps `ub_compress` and corrects the counter afterwards.
 
+### CPU detection is not part of this library
+
+Runtime selection (`-DUB_KERNEL_RUNTIME`) takes a function pointer; it does not
+decide which function. Deciding needs CPU identification — vendor, ISA
+features, and the specific core — and that is not BLAKE2b's business: the same
+detection serves any library, and BLAKE2b has no say in how a host wants to
+probe.
+
+If a binary needs it, put it beside the adapters as an ordinary
+`sys_probe.c` / `sys_probe.h` with no `ub_` names and no dependency on this
+library, and have the host call `ub_kernel_set()` with the result at startup.
+That keeps the probe reusable and keeps the library free of platform
+detection.
+
+Note that ISA support is the wrong question to ask it. The same NEON code
+measures faster than scalar on some ARM cores and slower on others — measured
+here at 1.5x slower — so a probe that answers "has NEON" selects wrongly. What
+a selector needs is the core identity plus a list of cores where a given
+implementation has been measured to win.
+
 ### Batching
 
 `ub_update` passes every whole block it holds in one call, keeping only the
@@ -309,31 +329,71 @@ runs anywhere and is a useful first signal on a bare target.
 
 # Measurements and conformance
 
-Apple M4 Pro (arm64), Apple clang, -O2. libsodium 1.0.21.
+Apple M4 Pro (arm64, 14 cores), Apple clang, -O2, libsodium 1.0.21.
 Median of 7 reps x 400k digests. Reproduce with `make bench`.
+
+Figures from one machine and one compiler. Run the benchmarks on the target
+rather than carrying these forward.
+
+## Per-digest
+
 Prefix 140 B, digest 50 B: the prefix crosses one block boundary, leaving 12
 bytes pending and room for a 4-byte tail in the final block.
 
-Figures from one machine and one compiler. Run `make bench` on the target
-rather than carrying them forward.
-
-| path | ns/digest | vs libsodium |
+| build | streaming | batch (`ub_hash_n`) |
 |---|--:|--:|
-| libsodium streaming | 280.2 | 1.00x |
-| uniblake streaming | 90.6 | 3.09x |
-| `ub_hash_n` | 89.7 | 3.12x |
+| libsodium | 285.0 ns | — |
+| uniblake scalar | 92.9 ns | 96.4 ns |
+| uniblake NEON | 138.6 ns | 141.4 ns |
+| uniblake, 4 threads | 93.4 ns | 26.2 ns |
+| uniblake, 8 threads | 93.2 ns | 13.4 ns |
 
-The gain is in `ub_update`, which compresses a full pending block as soon as
-more input follows: a state absorbed over a 140-byte prefix already holds one
-compressed block, so each digest costs one more. libsodium buffers 256 bytes
-and compresses only on overflow, so after the same prefix its counter is 0 and
-every digest re-absorbs the prefix — 2.7 compressions per digest against 1.
+The gain over libsodium is in `ub_update`, which compresses a full pending
+block as soon as more input follows: a state absorbed over a 140-byte prefix
+already holds one compressed block, so each digest costs one more. libsodium
+buffers 256 bytes and compresses only on overflow, so after the same prefix
+its counter is zero and every digest re-absorbs the prefix — 2.7 compressions
+per digest against 1.
 
-`ub_hash_n` measures at parity with the streaming path. It provides the
-geometry guarantee, leaves the prefix state unmodified, and is the entry point a
-parallel backend replaces.
+## Per workload
 
-### Conformance
+Nanoseconds per digest are hard to weigh. The same numbers as the hashing time
+for one proof-of-work solve, at two common parameter sets:
+
+| parameters | digests per solve |
+|---|--:|
+| (192, 7) | 16,777,216 |
+| (200, 9) | 1,048,576 |
+
+| build | (192,7) hashing | (200,9) hashing |
+|---|--:|--:|
+| libsodium | 4.8 s | 0.30 s |
+| uniblake scalar | 1.6 s | 0.10 s |
+| uniblake NEON | 2.4 s | 0.15 s |
+| uniblake, 4 threads | 0.44 s | 0.027 s |
+| uniblake, 8 threads | 0.22 s | 0.014 s |
+
+These are the hashing phase only, and they are a **lower bound**: a solver also
+copies the state per digest, writes each result into its own layout, and
+extracts more than one hash from each digest. Measured inside one such solver,
+libsodium costs 337 ns per call against the 285 ns here — 18% more — so expect
+the same margin on top of every row.
+
+Against a whole solve of 8.3 s, of which 5.7 s was hashing, replacing the hash
+alone predicts:
+
+| build | solve | speedup |
+|---|--:|--:|
+| libsodium (baseline) | 8.3 s | 1.00x |
+| uniblake scalar | 4.3 s | 1.95x |
+| uniblake, 4 threads | 3.1 s | 2.70x |
+| uniblake, 8 threads | 2.9 s | 2.90x |
+
+Threading past four threads gains little because the hashing phase is no
+longer the limit: at 8 threads it is 0.22 s of a 2.9 s solve. Everything
+beyond that is in the code that consumes the digests.
+
+## Conformance
 
 | suite | checks | needs an oracle | covers |
 |---|--:|---|---|
@@ -341,16 +401,16 @@ parallel backend replaces.
 | `tests/test_prefix.c` | 45,531 | yes | prefix geometry, counters, slices, batching |
 | `tests/test_api.c` | 24 | no | return codes, call ordering, the error handler |
 | `compat/test_compat.c` | 53 | yes | the libsodium adapter |
+| `tests/test_negative.c` | 7 | yes | that the checks above can fail |
 
-Core: RFC 7693 Appendix A "abc" KAT; input lengths 0..600 x digest lengths
-1..64; keyed 1..64-byte keys; salt + personalization; chunked updates at 29
-step sizes; copy independence; error surface.
+`tests/test_negative.c` links a compression function with one round removed and
+requires every oracle comparison — the RFC vector, unkeyed, keyed,
+personalized, and the prefix path — to reject it. A suite that cannot fail
+proves nothing, and a mistake that made a comparison vacuous would otherwise
+look like success. Run it with `make check-negative`.
 
-Prefix: geometry sweep (prefix 0..260, 66 lengths) x digest lengths 1..64 x
-personalization on/off; LE32/LE64 counter boundaries incl. 2^32 and ~0;
-raw tails 0..28; batch vs single over 3000 digests; shared state verified
-byte-identical after `ub_hash_n`; error surface.
+The NEON and threaded backends pass `tests/test_core.c` and
+`tests/test_prefix.c` unchanged; `make check-backends` runs them.
 
-Oracle is libsodium — an independent implementation. The `api/` tree links
-nothing from `uniblake/` or `vendor/`.
-
+Oracle is libsodium — an independent implementation. `include/` and `src/`
+link nothing.

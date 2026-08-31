@@ -72,6 +72,7 @@ with `make check SODIUM=/opt/homebrew`.
 | [docs/GUIDE.md](docs/GUIDE.md) | for callers: recipes, interface reference, adapters |
 | [docs/INTERNALS.md](docs/INTERNALS.md) | for implementers: state, compression backends, porting, measurements |
 | [docs/CPP.md](docs/CPP.md) | the C++ wrapper, and the two BLAKE2 reference lineages |
+| [docs/INTEGRATING.md](docs/INTEGRATING.md) | swapping the hash in an existing codebase: validation and measurement order |
 
 ## Drop-in use
 
