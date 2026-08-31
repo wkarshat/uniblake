@@ -99,6 +99,10 @@ int ub_copy      (ub_state *dst, const ub_state *src);
  * Default: one line to stderr. The library never aborts or exits; choosing
  * termination policy is the host's business, not a hash library's.
  *
+ * Every function that returns a ub_status reports through it, so a handler
+ * covers the whole interface rather than one corner of it. `ub_param_init`
+ * returns void and reports a NULL argument this way too.
+ *
  * Batch calls validate their arguments once, before hashing, so a handler
  * sees one report per call rather than one per digest.
  * The handler may be called from any thread; install it before first use.

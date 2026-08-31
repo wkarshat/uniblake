@@ -3,18 +3,28 @@
 #include "uniblake/prefix.h"
 
 int ub_prefix_check(const ub_state *S, size_t tailmax) {
-  if (!S) return UB_E_ARG;
+  if (!S) return ub_err(UB_E_ARG, __func__, "NULL state");
   /* The point of this call is to predict what the hashing calls will do, so
    * it has to reject everything they reject -- including a finalized state. */
-  if (S->f[0] != 0) return UB_E_STATE;
-  if (tailmax > UB_BLOCKBYTES) return UB_E_GEOMETRY;
+  if (S->f[0] != 0) return ub_err(UB_E_STATE, __func__, "state already finalized");
+  if (tailmax > UB_BLOCKBYTES)
+    return ub_err(UB_E_GEOMETRY, __func__, "tailmax exceeds one block");
   /* update() is eager, so at most one block is pending. A digest costs one
    * compression exactly when the tail still fits that block. */
-  return (S->buflen + tailmax <= UB_BLOCKBYTES) ? UB_OK : UB_E_GEOMETRY;
+  if (S->buflen + tailmax > UB_BLOCKBYTES)
+    return ub_err(UB_E_GEOMETRY, __func__,
+                  "prefix leaves no room for the tail in one block");
+  return UB_OK;
 }
 
 /* Hot path: copy the state, append the tail into the pending block, finalize.
- * One compression. */
+ * One compression.
+ *
+ * Deliberately silent: ub_hash_n calls this once per digest, so reporting
+ * here would emit one line per digest and break the "one report per call"
+ * guarantee in uniblake.h. Both callers validate the same conditions up
+ * front, where a batch reports them exactly once; these checks remain as the
+ * last line of defence and return their code bare. */
 static int finish(const struct ub_state *S, const uint8_t *tail, size_t taillen,
                   void *out, size_t outcap) {
   if (outcap < S->outlen) return UB_E_OUTCAP;
@@ -28,7 +38,17 @@ static int finish(const struct ub_state *S, const uint8_t *tail, size_t taillen,
 
 int ub_hash_tail(const ub_state *S, const void *tail, size_t taillen,
                  void *out, size_t outcap) {
-  if (!S || !out || (taillen && !tail)) return UB_E_ARG;
+  if (!S || !out) return ub_err(UB_E_ARG, __func__, "NULL state or output");
+  if (taillen && !tail)
+    return ub_err(UB_E_ARG, __func__, "NULL tail with nonzero taillen");
+  /* One digest per call, so the conditions finish() rechecks are reported
+   * here -- see the note on finish() above. */
+  if (S->f[0] != 0) return ub_err(UB_E_STATE, __func__, "state already finalized");
+  if (outcap < S->outlen)
+    return ub_err(UB_E_OUTCAP, __func__, "output buffer smaller than the digest");
+  if (S->buflen + taillen > UB_BLOCKBYTES)
+    return ub_err(UB_E_GEOMETRY, __func__,
+                  "prefix leaves no room for the tail in one block");
   return finish(S, (const uint8_t *)tail, taillen, out, outcap);
 }
 
@@ -46,25 +66,25 @@ static void enc_tail(uint64_t v, size_t w, uint8_t b[8]) {
 
 int ub_hash_n(const ub_state *S, size_t tailwidth, uint64_t first, size_t n,
               size_t off, size_t len, void *out, size_t stride) {
-  if (!S || !out) return ub_err(UB_E_ARG, "ub_hash_n", "NULL state or output");
+  if (!S || !out) return ub_err(UB_E_ARG, __func__, "NULL state or output");
   if (tailwidth != 4 && tailwidth != 8)
-    return ub_err(UB_E_ARG, "ub_hash_n", "tailwidth must be 4 or 8");
+    return ub_err(UB_E_ARG, __func__, "tailwidth must be 4 or 8");
   /* Bound `off` BEFORE deriving len from it: `S->outlen - off` is size_t, so
    * off > outlen underflows to a huge length, and the `off + len` that would
    * catch it wraps back to exactly outlen and passes. Both checks below are
    * written as subtractions on the known-good side for that reason. */
   if (off > S->outlen)
-    return ub_err(UB_E_ARG, "ub_hash_n", "slice outside the digest");
+    return ub_err(UB_E_ARG, __func__, "slice outside the digest");
   if (len == 0) len = S->outlen - off;          /* whole digest from off */
   if (len > S->outlen - off)
-    return ub_err(UB_E_ARG, "ub_hash_n", "slice outside the digest");
+    return ub_err(UB_E_ARG, __func__, "slice outside the digest");
   if (stride < len)
-    return ub_err(UB_E_OUTCAP, "ub_hash_n", "stride below bytes written");
+    return ub_err(UB_E_OUTCAP, __func__, "stride below bytes written");
   if (S->f[0] != 0)
-    return ub_err(UB_E_STATE, "ub_hash_n", "state already finalized");
+    return ub_err(UB_E_STATE, __func__, "state already finalized");
   /* Geometry is a property of the state, so validate once, not per digest. */
   if (S->buflen + tailwidth > UB_BLOCKBYTES)
-    return ub_err(UB_E_GEOMETRY, "ub_hash_n",
+    return ub_err(UB_E_GEOMETRY, __func__,
                   "prefix leaves no room for the tail in one block");
 
   /* `o` walks the output rather than indexing out + i*stride; both compile to

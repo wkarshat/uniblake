@@ -17,6 +17,12 @@ SODIUM  ?= /usr/local
 SODINC   = -I$(SODIUM)/include
 SODLIB   = -L$(SODIUM)/lib -lsodium
 
+# `all` must stay the default goal: make takes the FIRST target in the file,
+# and the library itself needs no libsodium. Declared before sodium-check so
+# inserting rules above `all` cannot silently make a bare `make` need the
+# oracle.
+.DEFAULT_GOAL := all
+
 # Fail with a useful message rather than a missing-header error.
 sodium-check:
 	@test -f "$(SODIUM)/include/sodium.h" || { \

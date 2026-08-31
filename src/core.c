@@ -5,7 +5,10 @@ size_t ub_state_size(void)  { return sizeof(struct ub_state); }
 size_t ub_state_align(void) { return _Alignof(struct ub_state); }
 
 void ub_param_init(ub_param *P, size_t digest_length) {
-  if (!P) return;
+  /* Returns void, so the handler is the only channel available here. The
+   * digest_length is not validated: it is a uint8_t field, and ub_init_param
+   * is where the 1..64 range is enforced and reported. */
+  if (!P) { ub_err(UB_E_ARG, __func__, "NULL parameter block"); return; }
   memset(P, 0, sizeof *P);
   P->digest_length = (uint8_t)digest_length;
   P->fanout = 1;                 /* sequential mode, RFC 7693 §2.5 */
@@ -21,9 +24,11 @@ static int finalized(const struct ub_state *S) { return S->f[0] != 0; }
 /* Absorb the parameter block by XOR into the IV (RFC 7693 §2.5). Serialized
  * here rather than stored, so `ub_param` need not be packed. */
 int ub_init_param(ub_state *S, const ub_param *P) {
-  if (!S || !P) return UB_E_ARG;
-  if (P->digest_length == 0 || P->digest_length > UB_OUTBYTES) return UB_E_ARG;
-  if (P->key_length > UB_KEYBYTES) return UB_E_ARG;
+  if (!S || !P) return ub_err(UB_E_ARG, __func__, "NULL state or parameter block");
+  if (P->digest_length == 0 || P->digest_length > UB_OUTBYTES)
+    return ub_err(UB_E_ARG, __func__, "digest_length must be 1..64");
+  if (P->key_length > UB_KEYBYTES)
+    return ub_err(UB_E_ARG, __func__, "key_length above 64");
 
   uint8_t blk[UB_OUTBYTES];
   memset(blk, 0, sizeof blk);
@@ -53,7 +58,8 @@ int ub_init(ub_state *S, size_t outlen) {
 
 int ub_init_key(ub_state *S, size_t outlen, const void *key, size_t keylen) {
   if (keylen == 0) return ub_init(S, outlen);
-  if (!key || keylen > UB_KEYBYTES) return UB_E_ARG;
+  if (!key) return ub_err(UB_E_ARG, __func__, "NULL key with nonzero keylen");
+  if (keylen > UB_KEYBYTES) return ub_err(UB_E_ARG, __func__, "keylen above 64");
   ub_param P; ub_param_init(&P, outlen);
   P.key_length = (uint8_t)keylen;
   int rc = ub_init_param(S, &P);
@@ -69,9 +75,9 @@ int ub_init_key(ub_state *S, size_t outlen, const void *key, size_t keylen) {
  * more input is known to follow. The final block is always retained, because
  * finalization must mark the last block, so it is never flushed early. */
 int ub_update(ub_state *S, const void *in, size_t inlen) {
-  if (!S) return UB_E_ARG;
-  if (inlen && !in) return UB_E_ARG;
-  if (finalized(S)) return UB_E_STATE;
+  if (!S) return ub_err(UB_E_ARG, __func__, "NULL state");
+  if (inlen && !in) return ub_err(UB_E_ARG, __func__, "NULL input with nonzero inlen");
+  if (finalized(S)) return ub_err(UB_E_STATE, __func__, "state already finalized");
   const uint8_t *p = (const uint8_t *)in;
 
   if (inlen == 0) return UB_OK;
@@ -94,9 +100,10 @@ int ub_update(ub_state *S, const void *in, size_t inlen) {
 }
 
 int ub_final(ub_state *S, void *out, size_t outcap) {
-  if (!S || !out) return UB_E_ARG;
-  if (outcap < S->outlen) return UB_E_OUTCAP;
-  if (finalized(S)) return UB_E_STATE;
+  if (!S || !out) return ub_err(UB_E_ARG, __func__, "NULL state or output");
+  if (outcap < S->outlen)
+    return ub_err(UB_E_OUTCAP, __func__, "output buffer smaller than the digest");
+  if (finalized(S)) return ub_err(UB_E_STATE, __func__, "state already finalized");
 
   inc(S, S->buflen);
   S->f[0] = (uint64_t)-1;
@@ -110,7 +117,7 @@ int ub_final(ub_state *S, void *out, size_t outcap) {
 }
 
 int ub_copy(ub_state *dst, const ub_state *src) {
-  if (!dst || !src) return UB_E_ARG;
+  if (!dst || !src) return ub_err(UB_E_ARG, __func__, "NULL source or destination");
   *dst = *src;
   return UB_OK;
 }
