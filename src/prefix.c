@@ -11,7 +11,9 @@ int ub_prefix_check(const ub_state *S, size_t tailmax) {
     return ub_err(UB_E_GEOMETRY, __func__, "tailmax exceeds one block");
   /* update() is eager, so at most one block is pending. A digest costs one
    * compression exactly when the tail still fits that block. */
-  if (S->buflen + tailmax > UB_BLOCKBYTES)
+  /* Subtract rather than add: buflen + tailmax wraps for a huge tailmax and
+   * would pass. buflen is never above BLOCKBYTES, so this cannot underflow. */
+  if (tailmax > (size_t)(UB_BLOCKBYTES - S->buflen))
     return ub_err(UB_E_GEOMETRY, __func__,
                   "prefix leaves no room for the tail in one block");
   return UB_OK;
@@ -28,7 +30,9 @@ int ub_prefix_check(const ub_state *S, size_t tailmax) {
 static int finish(const struct ub_state *S, const uint8_t *tail, size_t taillen,
                   void *out, size_t outcap) {
   if (outcap < S->outlen) return UB_E_OUTCAP;
-  if (S->buflen + taillen > UB_BLOCKBYTES) return UB_E_GEOMETRY;
+  /* Subtract, do not add: buflen + taillen wraps for a huge taillen and the
+   * memcpy below would then run off the state. */
+  if (taillen > (size_t)(UB_BLOCKBYTES - S->buflen)) return UB_E_GEOMETRY;
   if (S->f[0] != 0) return UB_E_STATE;
   struct ub_state t = *S;
   memcpy(t.buf + t.buflen, tail, taillen);
@@ -46,7 +50,7 @@ int ub_hash_tail(const ub_state *S, const void *tail, size_t taillen,
   if (S->f[0] != 0) return ub_err(UB_E_STATE, __func__, "state already finalized");
   if (outcap < S->outlen)
     return ub_err(UB_E_OUTCAP, __func__, "output buffer smaller than the digest");
-  if (S->buflen + taillen > UB_BLOCKBYTES)
+  if (taillen > (size_t)(UB_BLOCKBYTES - S->buflen))
     return ub_err(UB_E_GEOMETRY, __func__,
                   "prefix leaves no room for the tail in one block");
   return finish(S, (const uint8_t *)tail, taillen, out, outcap);
@@ -83,7 +87,7 @@ int ub_hash_n(const ub_state *S, size_t tailwidth, uint64_t first, size_t n,
   if (S->f[0] != 0)
     return ub_err(UB_E_STATE, __func__, "state already finalized");
   /* Geometry is a property of the state, so validate once, not per digest. */
-  if (S->buflen + tailwidth > UB_BLOCKBYTES)
+  if (tailwidth > (size_t)(UB_BLOCKBYTES - S->buflen))
     return ub_err(UB_E_GEOMETRY, __func__,
                   "prefix leaves no room for the tail in one block");
 

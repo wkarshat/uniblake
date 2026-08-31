@@ -211,6 +211,40 @@ int main(void){
     free(T);
   }
 
+  /* --- narrowing casts must not admit an out-of-range value ---
+   * A size_t that truncates into an accepted uint8_t (288 -> 32) must be
+   * rejected before the cast, not silently honoured as the truncated value. */
+  { uint8_t k32[32]; memset(k32,7,sizeof k32);
+    ub_param Q; ub_param_init(&Q, 288);
+    ok(Q.digest_length == 0,            "param_init rejects 288 rather than storing 32");
+    ok(ub_init_param(S,&Q)==UB_E_ARG,   "init_param rejects the result");
+    ok(ub_init(S,288)==UB_E_ARG,        "init rejects 288");
+    ok(ub_init(S,256)==UB_E_ARG,        "init rejects 256 (truncates to 0)");
+    ok(ub_init_key(S,288,k32,32)==UB_E_ARG, "init_key rejects outlen 288");
+    ok(ub_init_key(S,256,k32,32)==UB_E_ARG, "init_key rejects outlen 256");
+    /* ub_hash clamps outcap rather than refusing (see above); what matters
+     * here is that the clamp is not a TRUNCATION -- 288 must give 64, not
+     * 288 & 0xff == 32. */
+    { uint8_t c1[64], c2[64];
+      ub_hash(c1,288,"abc",3,NULL,0);
+      ub_hash(c2,64,"abc",3,NULL,0);
+      ok(memcmp(c1,c2,64)==0, "hash outcap 288 clamps to 64, not to 32"); } }
+
+  /* --- length guards must not wrap ---
+   * buflen + taillen overflows for a huge taillen; the guard has to compare
+   * against the remaining room instead, or the copy runs off the state. */
+  { ub_param Q; ub_param_init(&Q,32); ub_init_param(S,&Q); ub_update(S,pre,140);
+    ok(ub_hash_tail(S,pre,(size_t)-1,out,32)==UB_E_GEOMETRY,
+                                        "hash_tail rejects taillen SIZE_MAX");
+    ok(ub_hash_tail(S,pre,(size_t)-4,out,32)==UB_E_GEOMETRY,
+                                        "hash_tail rejects a near-wrap taillen");
+    ok(ub_prefix_check(S,(size_t)-1)==UB_E_GEOMETRY,
+                                        "prefix_check rejects tailmax SIZE_MAX");
+    ok(ub_hash_n(S,4,0,1,0,(size_t)-1,out,32)==UB_E_ARG,
+                                        "hash_n rejects len SIZE_MAX");
+    ok(ub_hash_n(S,4,0,1,(size_t)-1,4,out,32)==UB_E_ARG,
+                                        "hash_n rejects off SIZE_MAX"); }
+
   printf("api: checks=%d fails=%d -> %s\n",checks,fails,fails?"FAIL":"PASS");
   free(big);
   return fails!=0;

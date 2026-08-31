@@ -5,11 +5,21 @@ size_t ub_state_size(void)  { return sizeof(struct ub_state); }
 size_t ub_state_align(void) { return _Alignof(struct ub_state); }
 
 void ub_param_init(ub_param *P, size_t digest_length) {
-  /* Returns void, so the handler is the only channel available here. The
-   * digest_length is not validated: it is a uint8_t field, and ub_init_param
-   * is where the 1..64 range is enforced and reported. */
+  /* Returns void, so the handler is the only channel available here.
+   *
+   * Validate BEFORE the (uint8_t) cast: an oversized digest_length would
+   * truncate into a value ub_init_param accepts (288 -> 32), and the caller
+   * would then receive a 32-byte digest believing it asked for 288. Leaving
+   * the range check to ub_init_param does not help, because by then the
+   * out-of-range value is gone. Same shape as the keylen truncation in the
+   * libsodium adapter. */
   if (!P) { ub_err(UB_E_ARG, __func__, "NULL parameter block"); return; }
   memset(P, 0, sizeof *P);
+  if (digest_length == 0 || digest_length > UB_OUTBYTES)
+    return;   /* leaves digest_length 0; ub_init_param owns the rule and the
+               * report, so reporting here too would give one mistake two
+               * lines. What matters is that the out-of-range value never
+               * reaches the cast. */
   P->digest_length = (uint8_t)digest_length;
   P->fanout = 1;                 /* sequential mode, RFC 7693 §2.5 */
   P->depth  = 1;
@@ -52,6 +62,10 @@ int ub_init_param(ub_state *S, const ub_param *P) {
 }
 
 int ub_init(ub_state *S, size_t outlen) {
+  /* Range is reported by ub_init_param, which owns the 1..64 rule; reporting
+   * again here would give a caller two lines for one mistake. ub_param_init
+   * stops an oversized outlen BEFORE the (uint8_t) cast, so a value like 288
+   * arrives as 0 and is rejected rather than silently becoming 32. */
   ub_param P; ub_param_init(&P, outlen);
   return ub_init_param(S, &P);
 }
@@ -139,9 +153,11 @@ int ub_hash(void *out, size_t outcap, const void *in, size_t inlen,
   }
 
   struct ub_state S;
-  int rc = keylen ? ub_init_key(&S, outcap > UB_OUTBYTES ? UB_OUTBYTES : outcap,
-                                key, keylen)
-                  : ub_init(&S, outcap > UB_OUTBYTES ? UB_OUTBYTES : outcap);
+  /* outcap above 64 is clamped, not refused: `out` is a buffer capacity, and a
+   * caller passing a larger buffer gets the longest digest that fits. Tested
+   * in tests/test_api.c. */
+  size_t dl = outcap > UB_OUTBYTES ? UB_OUTBYTES : outcap;
+  int rc = keylen ? ub_init_key(&S, dl, key, keylen) : ub_init(&S, dl);
   if (rc != UB_OK) return rc;
   rc = ub_update(&S, in, inlen);
   if (rc != UB_OK) return rc;
