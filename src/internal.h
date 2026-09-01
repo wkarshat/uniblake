@@ -30,7 +30,6 @@
 struct ub_state {
   uint64_t h[8];                 /* chaining value */
   uint64_t t[2];                 /* message byte counter */
-  uint64_t f[2];                 /* finalization flags */
   uint8_t  buf[UB_BLOCKBYTES];   /* pending block; bytes >= buflen unused */
   /* buflen is at most 128 and outlen at most 64, so both fit a byte. Narrow
    * rather than size_t so that `keyed` costs nothing: they share one 8-byte
@@ -38,6 +37,12 @@ struct ub_state {
    * underflow notes in prefix.c. */
   uint8_t  buflen;
   uint8_t  outlen;
+  /* Finalization is a property of ONE compression, not of the state: the
+   * kernel takes it as an argument. What has to persist is only the fact
+   * that finalization happened, so a second ub_final can be rejected -- one
+   * byte, sharing the slot buflen/outlen already occupy. This replaces the
+   * 16-byte f[2] the reference layout carries. */
+  uint8_t  fin;
 #if UB_WIPE
   uint8_t  keyed;                /* set by ub_init_key; selects wiping in
                                   * ub_final */

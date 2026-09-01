@@ -44,7 +44,7 @@ static void inc(struct ub_state *S, uint64_t n) {
   S->t[0] += n;
   S->t[1] += (S->t[0] < n);
 }
-static int finalized(const struct ub_state *S) { return S->f[0] != 0; }
+static int finalized(const struct ub_state *S) { return S->fin != 0; }
 
 /* Absorb the parameter block by XOR into the IV (RFC 7693 §2.5). Serialized
  * here rather than stored, so `ub_param` need not be packed. */
@@ -166,7 +166,7 @@ int ub_final(ub_state *S, void *out, size_t outcap) {
   if (finalized(S)) return ub_err(UB_E_STATE, __func__, "state already finalized");
 
   inc(S, S->buflen);
-  S->f[0] = (uint64_t)-1;
+  S->fin = 1;
   memset(S->buf + S->buflen, 0, UB_BLOCKBYTES - S->buflen);
   ub_compress_final(S, S->buf);
 
@@ -180,7 +180,7 @@ int ub_final(ub_state *S, void *out, size_t outcap) {
    *
    * Only the secret-bearing fields are cleared. t, f, buflen and outlen stay,
    * so the finalized() guard above still rejects a second ub_final -- zeroing
-   * the whole struct would clear f[0] and silently re-enable it. `d` holds all
+   * the whole struct would clear `fin` and silently re-enable it. `d` holds all
    * 64 bytes even when outlen is shorter, so it is cleared too. */
 #if UB_WIPE
   if (S->keyed) wipe_secrets(S, d);
