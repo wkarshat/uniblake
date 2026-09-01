@@ -623,10 +623,10 @@ bytes pending and room for a 4-byte tail in the final block.
 |---|--:|--:|
 | libsodium 1.0.21 | 285.0 ns | — |
 | libsodium 1.0.22 | 185.9 ns | — |
-| uniblake scalar | 92.9 ns | 96.4 ns |
-| uniblake NEON | 138.6 ns | 141.4 ns |
-| uniblake, 4 threads | 93.4 ns | 26.2 ns |
-| uniblake, 8 threads | 93.2 ns | 13.4 ns |
+| uniblake scalar | 79.2 ns | 83.3 ns |
+| uniblake NEON | 142.8 ns | 142.1 ns |
+| uniblake, 4 threads | 79.9 ns | 23.9 ns |
+| uniblake, 8 threads | 80.9 ns | 12.3 ns |
 
 The oracle's own version moves the comparison: 1.0.22 is a third faster than
 1.0.21 on this machine, so the same uniblake build reads as 2.0x rather than

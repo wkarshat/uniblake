@@ -10,6 +10,23 @@
  *
  * NEON is base ISA on aarch64, so no runtime probe is needed. Whether it is
  * FASTER is a separate question -- see backends/README.md.
+ *
+ * Formulations measured on an Apple M4 Pro, leaf shape, ns/digest:
+ *
+ *   141  original: scalar m[16] array, vector literals {m[a],m[b]}
+ *   136  this one: message left in memory, pairs built with dup + lane load
+ *   163  the above, twelve rounds unrolled with literal sigma indices
+ *   163  same, pairs via vcombine_u64(vcreate_u64(..), ..)
+ *   163  same, pairs via dup + lane load
+ *   180  rot24/rot16 as two per-half vext instead of one tbl
+ *
+ * Two results worth keeping. Unrolling costs ~27 ns here regardless of how the
+ * message is gathered -- the opposite of the scalar kernel, where it gained
+ * 11%. And tbl beats a pair of ext for the byte rotations despite its higher
+ * nominal latency, because ext needs the halves split and recombined.
+ *
+ * The gather is the remaining cost: only 3 of 96 sigma pairs are adjacent in
+ * memory, so a pair-load fast path buys nothing.
  */
 #include "internal.h"
 
@@ -60,8 +77,8 @@ void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks){
     S->t[1] += (S->t[0] < UB_BLOCKBYTES);
     const uint8_t *B = blocks + k * UB_BLOCKBYTES;
 
-    uint64_t m[16];
-    for (int i = 0; i < 16; ++i) m[i] = ub_load64(B + 8*i);
+    const uint64_t *M = (const uint64_t *)(const void *)B;
+#define MP(x,y) vld1q_lane_u64(&M[y], vld1q_dup_u64(&M[x]), 1)
 
     uint64x2_t a0 = vld1q_u64(&S->h[0]), a1 = vld1q_u64(&S->h[2]);
     uint64x2_t b0 = vld1q_u64(&S->h[4]), b1 = vld1q_u64(&S->h[6]);
@@ -78,17 +95,18 @@ void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks){
     for (int r = 0; r < 12; ++r) {
       const uint8_t *g = ub_sigma[r];
       /* column step: G(r,i, v[i], v[4+i], v[8+i], v[12+i]) for i=0..3 */
-      uint64x2_t m0 = {m[g[0]], m[g[2]]},  m1 = {m[g[4]], m[g[6]]};
-      uint64x2_t m2 = {m[g[1]], m[g[3]]},  m3 = {m[g[5]], m[g[7]]};
+      uint64x2_t m0 = MP(g[0],g[2]), m1 = MP(g[4],g[6]);
+      uint64x2_t m2 = MP(g[1],g[3]), m3 = MP(g[5],g[7]);
       G1(a0,b0,c0,d0,m0); G1(a1,b1,c1,d1,m1);
       G2(a0,b0,c0,d0,m2); G2(a1,b1,c1,d1,m3);
       DIAG(b0,b1,c0,c1,d0,d1);
-      uint64x2_t m4 = {m[g[8]],  m[g[10]]}, m5 = {m[g[12]], m[g[14]]};
-      uint64x2_t m6 = {m[g[9]],  m[g[11]]}, m7 = {m[g[13]], m[g[15]]};
+      uint64x2_t m4 = MP(g[8],g[10]), m5 = MP(g[12],g[14]);
+      uint64x2_t m6 = MP(g[9],g[11]), m7 = MP(g[13],g[15]);
       G1(a0,b0,c0,d0,m4); G1(a1,b1,c1,d1,m5);
       G2(a0,b0,c0,d0,m6); G2(a1,b1,c1,d1,m7);
       UNDIAG(b0,b1,c0,c1,d0,d1);
     }
+#undef MP
     uint64x2_t h0 = vld1q_u64(&S->h[0]), h1 = vld1q_u64(&S->h[2]);
     uint64x2_t h2 = vld1q_u64(&S->h[4]), h3 = vld1q_u64(&S->h[6]);
     vst1q_u64(&S->h[0], veorq_u64(h0, veorq_u64(a0,c0)));

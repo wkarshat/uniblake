@@ -30,10 +30,10 @@ general.
 
 | build | streaming | `ub_hash_n` |
 |---|--:|--:|
-| scalar (shipped) | 92.9 ns | 96.4 ns |
-| NEON | 138.6 ns | 141.4 ns |
-| 4 threads | 93.4 ns | 26.2 ns |
-| 8 threads | 93.2 ns | 13.4 ns |
+| scalar (shipped) | 79.2 ns | 83.3 ns |
+| NEON | 142.8 ns | 142.1 ns |
+| 4 threads | 79.9 ns | 23.9 ns |
+| 8 threads | 80.9 ns | 12.3 ns |
 
 Figures from one machine; re-measure on the target.
 
@@ -55,10 +55,9 @@ Measured in a VM; re-measure on the target.
 ## The scalar kernel now sets a higher bar
 
 `src/compress.c` was hand-unrolled with literal sigma indices and moved from
-89 to 79.5 ns/digest. Every figure below predates that and is measured against
-the old 89 ns baseline; the gap to scalar is now wider than the tables say.
+89 to 79.2 ns/digest. The tables below are re-measured against it.
 
-More usefully, the change identifies a defect these kernels share.
+The change identifies a defect these kernels share.
 `compress_neon.c` still reads `ub_sigma[r]` inside its round loop and builds
 each message vector one lane at a time. In scalar, removing exactly that cost
 11% and *reduced* spilling, because the address registers freed outweighed the
@@ -84,15 +83,25 @@ Apple M4 Pro:
 
 | kernel | ns/digest |
 |---|--:|
-| scalar (`src/compress.c`) | 90 |
-| `compress_neon.c` | 141 |
+| scalar (`src/compress.c`) | 79.2 |
+| `compress_neon.c` | 142.8 |
 
 BLAKE2b's G function exposes only two independent 64-bit lanes within one
 message, so a 128-bit register buys one doubling while wide scalar issue
-already extracts more. Unrolling the rounds makes it worse rather than better:
-holding the eight message vectors live across twelve rounds exhausts aarch64's
-32 vector registers and spills. A kernel built that way measured 187 ns; it is
-recoverable from the `neon-both-kernels` tag.
+already extracts more.
+
+An unrolled variant measured 187 ns -- worse still -- and was removed;
+recover it from the `neon-both-kernels` tag. **The reason is not register
+pressure.** Read from the generated code, that kernel spills *less* per
+instruction than the looped one (4.1% against 6.0%) and eliminates the nine
+sigma byte-loads entirely. What it adds is shuffling: 347 `ext` instructions
+against the looped kernel's 8 `ld1`, because the donor's `LOAD_MSG` macros
+assemble each message vector with `vext`/`vcombine` rather than lane inserts.
+On this core that trade loses.
+
+That correction matters because the same "unrolling exhausts the registers"
+reasoning was recorded for the scalar kernel and proved wrong there too:
+hand-unrolling with literal sigma indices gained 11% and *reduced* spilling.
 
 The sign of the loss depends on the core, so the kernel is kept: correct,
 measured, and the right starting point where scalar is weaker. Do not adopt it
@@ -113,10 +122,10 @@ Measured on the M4 Pro, prefix 140 B, digest 50 B:
 
 | threads | ns/digest | speedup |
 |--:|--:|--:|
-| 1 | 93.8 | 1.0x |
-| 2 | 49.5 | 1.9x |
-| 4 | 25.5 | 3.7x |
-| 8 | 13.0 | 7.2x |
+| 1 | 83.4 | 1.0x |
+| 2 | 42.6 | 2.0x |
+| 4 | 24.0 | 3.5x |
+| 8 | 12.3 | 6.8x |
 
 Close to linear, which is what an embarrassingly parallel range should give.
 Reproduce with `make bench-threads THREADS=<n>`.
