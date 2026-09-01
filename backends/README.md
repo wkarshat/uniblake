@@ -45,6 +45,31 @@ general.
 
 Figures from one machine; re-measure on the target.
 
+## The scalar kernel now sets a higher bar
+
+`src/compress.c` was hand-unrolled with literal sigma indices and moved from
+89 to 79.5 ns/digest. Every figure below predates that and is measured against
+the old 89 ns baseline; the gap to scalar is now wider than the tables say.
+
+More usefully, the change identifies a defect these kernels share.
+`compress_neon.c` still reads `ub_sigma[r]` inside its round loop and builds
+each message vector one lane at a time. In scalar, removing exactly that cost
+11% and *reduced* spilling, because the address registers freed outweighed the
+extra live values. The NEON kernel has never been tried with the permutation
+resolved at compile time.
+
+The vendored AVX2 donor already does this: `blake2b-load-avx2.h` contains zero
+references to sigma, resolving all twelve rounds through 48
+`BLAKE2B_LOAD_MSG_r_n` macros. That is the shape to copy, and it is the reason
+the donor is worth vendoring rather than writing a kernel from scratch.
+
+A caveat before assuming this transfers. An unrolled NEON kernel *was* built
+and measured slower -- 187 ns against the looped kernel's 144 -- and removed;
+recover it from the `neon-both-kernels` tag. But that kernel unrolled the
+rounds while still assembling message vectors by lane insert, so it paid the
+code growth without collecting the saving. Whether literal-index loads change
+the result is untested.
+
 ## NEON is slower than scalar here
 
 Both NEON kernels are correct and both lose to the scalar compression on an
