@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* The adapters must reproduce libsodium byte-for-byte.
  * Real libsodium is the oracle; the shim is renamed to avoid collision. */
 #include <sodium.h>

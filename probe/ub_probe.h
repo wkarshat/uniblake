@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* uniblake CPU probe interface.
  *
  * Two layers:

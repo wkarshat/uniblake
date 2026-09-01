@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* Streaming core. See include/uniblake/uniblake.h. */
 #include "internal.h"
 #include <stddef.h>   /* offsetof, in the C99 alignment fallback */

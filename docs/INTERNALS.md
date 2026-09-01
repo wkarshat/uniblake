@@ -293,6 +293,13 @@ use. `bench/bench_prefix.c` reports the repeated-prefix shape for that reason.
 `make check` is the test. Three kinds of evidence are admissible, in
 decreasing strength:
 
+0. **Published known-answer vectors.** `tests/test_kat.c` checks the BLAKE2
+   authors' own vectors for input lengths 0-255, unkeyed and keyed, one-shot
+   and streamed. Weaker than (1) as coverage -- a fixed list, one digest
+   length -- but independent of any implementation, and the only conformance
+   check that runs where libsodium is unavailable. `tests/gen_kat.py`
+   regenerates the header from a reference-package clone.
+
 1. **Byte agreement with an independent implementation.** `tests/test_core.c`
    and `tests/test_prefix.c` compare every digest against libsodium across
    message lengths 0–600, digest lengths 1–64, key lengths, 29 update
@@ -357,6 +364,46 @@ target had passed repeatedly on macOS.
 second compiler to widen it: `make check-portable CC2=gcc-16`. A warning is
 a failure there, because the standards claim above is only worth what the
 strictest available compiler says about it.
+
+### Driving a build matrix
+
+Every target takes `CC`, `AR`, `BUILD` and `EXE`, so a matrix is a loop over
+those rather than a separate build system. `BUILD` is what keeps the runs from
+colliding: each configuration gets its own output tree and none invalidates
+another.
+
+```sh
+for cc in cc gcc-16 x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc; do
+  for std in c99 c11; do
+    make BUILD=build-$cc-$std CC=$cc CFLAGS="-O2 -std=$std -Wall -Wextra -Wpedantic"
+  done
+done
+```
+
+Cross targets additionally need `AR=<triple>-ar` and `EXE=.exe`. A build that
+only compiles establishes portability of the source, not correctness of the
+digests; for that the suites have to run on the target, natively or under an
+emulator.
+
+`make check-portable` automates the compile half for two compilers and both
+standards, and treats a warning as a failure. It does not link or run, so it
+is fast enough to precede every other check.
+
+Recorded coverage on the development machine, all warning-free under
+`-Wall -Wextra -Wpedantic` at both C99 and C11:
+
+| toolchain | target | suites |
+|---|---|---|
+| Apple clang 21 | arm64 Mach-O | all, natively |
+| Homebrew GCC 16 | arm64 Mach-O | all, natively |
+| MinGW GCC 16 x86_64 | amd64 COFF | compile and link only |
+| MinGW GCC 16 i686 | i386 COFF | compile and link only |
+
+The i686 row is the one that earns its place: a 32-bit `size_t` is the only
+check available here on the narrowing of `buflen` and `outlen` to `uint8_t`.
+The two Windows rows link `tests/test_api.c` and `compat/test_blake2_alias.c`,
+which need no oracle; the remaining suites need a libsodium built for the same
+target.
 
 ### The platform matrix
 
@@ -562,6 +609,7 @@ beyond that is in the code that consumes the digests.
 
 | suite | oracle | covers |
 |---|---|---|
+| `tests/test_kat.c` | none; published vectors | input lengths 0-255, unkeyed and keyed, one-shot and streamed |
 | `tests/test_core.c` | libsodium | streaming, parameters, keys, the RFC vector |
 | `tests/test_prefix.c` | libsodium | prefix geometry, counters, slices, batching |
 | `tests/test_api.c` | none | return codes, call ordering, the error handler |

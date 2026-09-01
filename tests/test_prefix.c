@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* Prefix-layer conformance vs libsodium: geometry, personalization, tail
  * encodings, batch, and non-mutation of the shared state. */
 #include "uniblake/prefix.h"

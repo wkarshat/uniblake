@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* libsodium source compatibility for uniblake.
  *
  * Lets a consumer keep libsodium call sites unchanged. Not part of the core:

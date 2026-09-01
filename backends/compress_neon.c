@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* AArch64 NEON compression, 2 lanes of 64-bit within one message.
  *
  * Rows of the working vector are held as pairs in 128-bit registers, so each

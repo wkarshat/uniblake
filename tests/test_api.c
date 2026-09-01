@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* Interface behaviour: return codes, call ordering, and the error handler.
  *
  * Digest correctness is tests/test_core.c and tests/test_prefix.c; this suite

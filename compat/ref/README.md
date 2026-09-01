@@ -1,4 +1,8 @@
-# Vendored BLAKE2 author reference, renamed
+# BLAKE2 author reference, renamed
+
+Derived work, not vendored: the identifiers were changed, so the upstream
+copyright below is retained and no UniBlake copyright is added. The algorithm
+is untouched.
 
 The oracle for `compat/ub_blake2.h`. Source: the reference C implementation
 at github.com/BLAKE2/BLAKE2, copyright 2012 Samuel Neves, under CC0 /

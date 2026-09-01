@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* Repeated-prefix hashing. See include/uniblake/prefix.h. */
 #include "internal.h"
 #include "uniblake/prefix.h"

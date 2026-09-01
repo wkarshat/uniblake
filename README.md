@@ -93,10 +93,18 @@ The rest of the validation, same on every platform:
 make check-portable CC2=<second compiler>   # C99 and C11, warnings are failures
 make check-wipe-modes SODIUM=<prefix>       # secret-wiping compiled in and out
 make check-negative SODIUM=<prefix>         # proves the suites can fail
+make check-backends SODIUM=<prefix>         # each alternative kernel, full oracle set
 make check-sanitize SODIUM=<prefix>         # ASan + UBSan; leak checks are Linux-only
 make bench SODIUM=<prefix>                  # ns/digest for this machine
+make bench-neon SODIUM=<prefix>             # same, with the NEON kernel (aarch64)
+make bench-threads THREADS=<n> SODIUM=<..>  # same, with the range split across threads
 make probe                                  # CPU identity; report it with any figure
 ```
+
+`make check-kat` and `make check-alias` are part of `make check` and need no
+libsodium: the first runs the BLAKE2 authors' published vectors, the second
+checks the `blake2.h` shim against the vendored reference. Run either alone on
+a target with no libsodium.
 
 ### Setup and details, per platform
 
@@ -286,6 +294,9 @@ without anything failing to signal it.
   never compared.
 - **Named downstream projects.** A consumer's domain is its own; examples
   here are generic.
+- **Alternatives and selection criteria.** These documents describe what the
+  library uses, with its strengths and limitations. Which implementations were
+  considered, and on what grounds, is program-level material.
 
 A number that would go stale needs a command that regenerates it. Prefer
 "run `make check`" over quoting a check count.
@@ -306,15 +317,53 @@ See [docs/GUIDE.md](docs/GUIDE.md#adapters).
 ```
 include/uniblake/   public headers
 src/                implementation
-compat/             adapter headers (compat/ref: vendored oracle)
-backends/           alternative NEON and threaded kernels (backends/vendor: donor macros)
-tests/  bench/      conformance, measurement
+compat/             adapter headers (compat/ref: derived oracle)
+backends/           alternative NEON and threaded kernels
+tests/  bench/      conformance, measurement (tests/vendor: published vectors)
 probe/              CPU identity and ISA flags (make probe)
 docs/
 ```
 
 `include/` and `src/` are self-contained: vendor those two directories and
 nothing else.
+
+### Original, derived, and vendored
+
+Every source file is one of three things, and which one decides its copyright
+header.
+
+**Original.** Written from scratch, using this project's file structure,
+naming conventions, layout and comment style. Including a vendored header is
+allowed and does not change this: what makes code original is that we wrote
+it, not that it references nothing. Carries
+
+```c
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 UniBlake Developers */
+```
+
+**Derived.** Modifies existing third-party code, leaving sections intact and
+following the original's naming and layout. Retains the prior copyright
+statement, with ours added alongside it -- never replacing it.
+
+**Vendored.** Copied unmodified into a `vendor/` directory, keeping its
+upstream name, layout and comments, with a note giving the upstream link and
+the commit taken. Untouched: a local edit makes it derived.
+
+Two derived components are present, each keeping the upstream copyright
+alone: `compat/ref/`, the BLAKE2 author reference with its identifiers
+mechanically renamed, and `tests/vendor/`, the authors' published test vectors
+re-expressed as C arrays. `backends/vendor/` is empty, held open for kernel
+donors.
+
+## Licensing
+
+MIT, Copyright (c) 2026 UniBlake Developers. Original files carry a one-line
+notice; a standalone `LICENSE` file is under consideration.
+
+Third-party and derived code retains its own terms and copyright, stated in
+the README of the directory it sits in. `compat/ref/` is the only such code
+currently present.
 
 ## References
 
@@ -329,16 +378,12 @@ the authorities.
 
 | | |
 |---|--:|
-| library source (`include/` + `src/`) | 795 lines |
-| conformance checks in `make check` | 47,590 |
-| suites | 5, plus a negative suite that must fail |
+| library source (`include/` + `src/`) | 825 lines |
+| conformance checks in `make check` | 49,126 |
+| suites | 6, plus a negative suite that must fail |
 | build dependencies | none |
-| test dependencies | libsodium, for four of the five suites |
+| test dependencies | libsodium, for four of the six suites |
 
 The negative suite links a compression function with one round removed and
 requires every oracle comparison to reject it: a suite that cannot fail proves
 nothing.
-
-## License
-
-See LICENSE.

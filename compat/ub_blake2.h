@@ -1,8 +1,9 @@
-/* BLAKE2 author-reference compatibility -- the Neves lineage.
+/* Copyright (c) 2026 UniBlake Developers */
+/* BLAKE2 author-reference compatibility.
  *
- * Covers the `blake2.h` API from github.com/BLAKE2/BLAKE2 (Samuel Neves et
- * al.), which libsodium, CPython and most distributions track. uniblake
- * already follows this API's names and argument order, so this file is
+ * Covers the `blake2.h` API from github.com/BLAKE2/BLAKE2, which libsodium,
+ * CPython and most distributions track. uniblake already follows this API's
+ * names and argument order, so this file is
  * aliases rather than translation: include it instead of `blake2.h` and
  * sequential BLAKE2b call sites compile unchanged.
  *

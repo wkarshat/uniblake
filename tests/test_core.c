@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* Core conformance vs libsodium: lengths, digest sizes, keys, salt/personal,
  * chunked updates, and the RFC 7693 "abc" KAT. */
 #include "uniblake/uniblake.h"

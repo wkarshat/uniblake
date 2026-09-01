@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 #include "internal.h"
 const uint64_t ub_iv[8] = {
   0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL, 0x3c6ef372fe94f82bULL,

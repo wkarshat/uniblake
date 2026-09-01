@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* uniblake — BLAKE2b (RFC 7693).
  *
  * Self-contained: this directory depends on no other implementation.

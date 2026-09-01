@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* compat/ub_blake2.h must reproduce the BLAKE2 author reference byte for
  * byte. The vendored reference is the oracle, renamed ref_* so the shim's
  * unprefixed names and the reference can coexist here (see compat/ref). */

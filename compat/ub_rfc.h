@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* RFC 7693 Appendix-A sample-code compatibility.
  *
  * WARNING: the RFC's blake2b_final(ctx, out) takes no output capacity -- the

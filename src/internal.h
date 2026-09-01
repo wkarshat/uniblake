@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* Internal layout, shared by the .c files in this directory.
  *
  * This header is not part of the interface: it is not copied to an include

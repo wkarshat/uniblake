@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* Portable scalar compression function (RFC 7693 §3.2).
  *
  * This is the one function a SIMD, threaded, or offload implementation

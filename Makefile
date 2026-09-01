@@ -68,12 +68,18 @@ $(BUILD)/%.o: src/%.c
 
 # The BLAKE2 author-reference alias shim, checked against the vendored
 # reference (compat/ref). Needs no libsodium, so it joins the default `check`.
+# Published BLAKE2b vectors: no oracle, so this runs where libsodium does not.
+check-kat: | $(BUILD)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(INC) tests/test_kat.c $(SRC) -o $(BUILD)/ub_kat$(EXE)
+	$(BUILD)/ub_kat$(EXE)
+
 check-alias: | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) -Icompat -Icompat/ref compat/test_blake2_alias.c \
 	  $(SRC) compat/ref/ref_blake2b.c -o $(BUILD)/ub_alias$(EXE)
 	$(BUILD)/ub_alias$(EXE)
 
-check: sodium-check check-alias | $(BUILD)
+check: sodium-check check-kat check-alias | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) $(SODINC) tests/test_core.c   $(SRC) $(SODLIB) -o $(BUILD)/ub_core$(EXE)
 	$(CC) $(CFLAGS) $(INC) $(SODINC) tests/test_prefix.c $(SRC) $(SODLIB) -o $(BUILD)/ub_prefix$(EXE)
 	$(CC) $(CFLAGS) $(INC)           tests/test_api.c  $(SRC)           -o $(BUILD)/ub_api$(EXE)
@@ -88,7 +94,7 @@ clean:
 	rm -f src/*.o libuniblake.a
 	rm -rf $(BUILD)
 
-.PHONY: all check bench clean sodium-check check-alias
+.PHONY: all check bench clean sodium-check check-alias check-kat
 
 # CPU identity and ISA flags. Not part of the library -- the core has no
 # dispatch -- but a measurement should be reported with the machine it came
@@ -106,13 +112,6 @@ bench-neon: | $(BUILD)
 	  src/core.c src/const.c src/prefix.c backends/compress_neon.c $(SODLIB) -o $(BUILD)/ub_bench_neon$(EXE)
 	$(BUILD)/ub_bench_neon$(EXE)
 
-bench-neon-unrolled:
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(INC) $(SODINC) bench/bench_prefix.c \
-	  src/core.c src/const.c src/prefix.c backends/compress_neon_unrolled.c \
-	  $(SODLIB) -o $(BUILD)/ub_bench_nu$(EXE)
-	$(BUILD)/ub_bench_nu$(EXE)
-
 bench-threads: | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) $(SODINC) -DUB_HASH_N_SERIAL -DUB_THREADS=$(THREADS) \
 	  bench/bench_prefix.c $(SRC) backends/hash_n_threads.c $(SODLIB) -lpthread -o $(BUILD)/ub_bench_thr$(EXE)
@@ -129,7 +128,7 @@ check-negative: | $(BUILD)
 # kernel that only replaces ub_compress still has to satisfy the adapter and
 # the return-code contract. NEON kernels are skipped on non-aarch64, where they
 # compile to an empty translation unit and the scalar compress is absent.
-UB_KERNELS = compress_neon compress_neon_unrolled
+UB_KERNELS = compress_neon
 
 check-backends: | $(BUILD)
 	@case "$$(uname -m)" in \
@@ -209,5 +208,5 @@ check-sanitize: sodium-check | $(BUILD)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(BUILD)/ub_san_pre$(EXE)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(BUILD)/ub_san_api$(EXE)
 
-.PHONY: bench-neon bench-neon-unrolled bench-threads check-backends check-negative check-portable
+.PHONY: bench-neon bench-threads check-backends check-negative check-portable
 .PHONY: check-wipe-modes check-sanitize

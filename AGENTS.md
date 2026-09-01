@@ -23,17 +23,8 @@
 - State the durable fact, not the history: what the code does and why it must,
   not what it used to do or which approach was rejected. Keep measured
   evidence that justifies a constant; drop the narrative around it.
-- Describe what this library uses, with its strengths and limitations. No
-  lists of alternatives, no selection criteria, no comparison with other
-  implementations: that belongs to the program's BLAKE record.
-- No dates, contributor names, upstream commit history, or provenance
-  narrative: that material follows a different lifecycle than the code and
-  goes stale silently. A vendored file needs a note giving its upstream link
-  and pin; nothing more.
-- Code copied unmodified goes in a `vendor/` directory and keeps its upstream
-  name, layout and comments. Code that borrows only an approach, with our own
-  naming, layout and commentary, is ours and is documented as ours. Including
-  a vendored header from our own kernel is the normal case.
+- Follow the scope and vendoring rules in README.md; they are project policy,
+  not style.
 - A number that would go stale needs a command that regenerates it.
 - State what an omission costs the caller and what to do instead, rather than
   listing it as absent.

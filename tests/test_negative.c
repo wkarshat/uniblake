@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* Proves the conformance suites can FAIL.
  *
  * A test that always passes proves nothing. This one links a deliberately

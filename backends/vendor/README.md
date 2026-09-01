@@ -1,15 +1,13 @@
-# Vendored BLAKE2 NEON macros
+# Third-party kernel sources
 
-Copied unmodified from the BLAKE2 reference package
-([github.com/BLAKE2/BLAKE2](https://github.com/BLAKE2/BLAKE2)), `neon/`
-subdirectory, pin `ed1974e`. CC0 1.0 / OpenSSL / Apache-2.0 at the user's
-option; see the header of each file.
+Empty. Kernel sources copied from another project belong here, unmodified,
+each with a note giving its upstream link and the commit it was taken from.
 
-Used by `backends/compress_neon_unrolled.c`. `blake2b-round.h` defines `G1`,
-`G2`, `DIAGONALIZE`, `UNDIAGONALIZE` and `ROUND(r)`; `blake2b-load-neon.h`
-defines the 48 `LOAD_MSG_r_n` macros that resolve the sigma permutation at
-compile time. The macros read `m0`..`m7`, `row1l`..`row4h`, `t0`, `t1`, `b0`
-and `b1` from the enclosing scope; the kernel declares them.
+Held open because a SIMD or batch kernel adopted later is likely to start from
+a donor rather than from scratch. The BLAKE2 reference package's NEON macros
+were vendored here while an unrolled kernel was being evaluated; that kernel
+measured slower than the one in `backends/` and was removed. Recover both from
+the `neon-both-kernels` tag.
 
-Not part of the library: nothing in `include/` or `src/` refers to this, and
-`backends/` is not built by `make all`.
+Files here keep their upstream copyright and license. Files elsewhere in this
+repository are MIT, Copyright (c) 2026 UniBlake Developers.

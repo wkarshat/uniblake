@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* uniblake — hashing many messages that begin with the same bytes.
  *
  * For H(prefix || tail_0), H(prefix || tail_1), ... Absorb the prefix into a

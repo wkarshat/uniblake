@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* Aligned allocation for the test and bench harnesses.
  *
  * C11 aligned_alloc is not universally available: MinGW's UCRT omits it and

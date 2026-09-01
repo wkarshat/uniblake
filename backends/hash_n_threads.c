@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* Concurrent ub_hash_n: split the digest range across POSIX threads.
  *
  * This replaces the BATCH entry point, not the compression function. Each

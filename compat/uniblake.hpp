@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* uniblake — optional C++ wrapper.
  *
  * Header-only, C++11, no dependencies beyond the C library. Nothing in

@@ -373,7 +373,18 @@ one final block. The general rule and a size table are in the recipes above.
 # Adapters
 
 Header-only shims in `compat/`, letting existing call sites use uniblake
-without source changes. Opt-in: nothing in `include/` or `src/` refers to
+without source changes.
+
+| file | purpose | origin |
+|---|---|---|
+| `ub_sodium.h` | libsodium `crypto_generichash_blake2b_*` | original |
+| `ub_blake2.h` | BLAKE2 author reference `blake2.h` | original |
+| `ub_rfc.h` | RFC 7693 Appendix-A shape | original |
+| `uniblake.hpp` | C++11 wrapper | original |
+| `test_compat.c` | checks `ub_sodium.h` against real libsodium | original |
+| `test_blake2_alias.c` | checks `ub_blake2.h` against the renamed reference | original |
+| `ref/` | the BLAKE2 author reference, identifiers renamed; oracle for the above | derived, upstream copyright |
+ Opt-in: nothing in `include/` or `src/` refers to
 them, and a caller that ports its call sites never includes one.
 
 ### libsodium

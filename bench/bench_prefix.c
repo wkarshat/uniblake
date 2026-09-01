@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* Streaming vs prefix state, on the geometry where they differ.
  * Median ns/digest. Correctness is the tests' job, not this file's. */
 #include "uniblake/prefix.h"

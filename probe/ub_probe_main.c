@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 UniBlake Developers */
 /* Print the CPU identity and ISA flags a measurement should be reported with.
  *
  * Not part of the library: the core has one scalar kernel and no dispatch, so
