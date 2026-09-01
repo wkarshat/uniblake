@@ -288,6 +288,7 @@ int main(void){
     ub_aligned_free(K); ub_aligned_free(C); ub_aligned_free(U); }
 
   printf("api: checks=%d fails=%d -> %s\n",checks,fails,fails?"FAIL":"PASS");
+  ub_aligned_free(S);
   free(big);
   return fails!=0;
 }

@@ -57,6 +57,7 @@ int main(void){
   printf("  uniblake streaming     %7.1f   %.2fx\n",ubs,sod/ubs);
   printf("  ub_hash_n, n=1        %7.1f   %.2fx\n",one,sod/one);
   printf("  ub_hash_n              %7.1f   %.2fx\n",many,sod/many);
+  free(m);
   ub_aligned_free(S); ub_aligned_free(W);
   (void)sink; return 0;
 }
