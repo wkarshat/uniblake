@@ -27,66 +27,33 @@ Prefix 140 B, digest 50 B, median of 7 reps x 400k digests.
 
 Figures from one machine; re-measure on the target.
 
-## NEON is slower here, from two causes
+## NEON is slower than scalar here
 
-143.1 ns against 89.2 scalar on the M4 Pro, a 1.6x loss. Two distinct reasons,
-and only the first is inherent.
-
-**The algorithm.** BLAKE2b's G-function exposes two independent 64-bit lanes
-within one message, so a 128-bit register buys one doubling while wide scalar
-issue already extracts more. Published results have the same NEON code faster
-than scalar on some ARM cores and slower on others, so the sign of this term
-depends on the core.
-
-**This implementation's message gather.** The round loop indexes `ub_sigma` at
-runtime and assembles each message vector one lane at a time. In the generated
-code that is five instructions per vector -- two `ldrb` for the sigma bytes, an
-address `add`, a scalar `ldr` for lane 0, and `ld1.d {v}[1]` for lane 1 --
-eight vectors per round, twelve rounds. Roughly 480 instructions of gather
-against 24 `add.2d` of G-function work.
-
-The reference package's NEON code avoids this entirely: it unrolls all twelve
-rounds and emits 48 `LOAD_MSG_r_n` macros that build each vector with
-`vcombine_u64` from message words already in registers. No runtime sigma
-lookup, no lane inserts.
-
-That hypothesis was tested and is wrong. `compress_neon_unrolled.c` is the
-same kernel built on the reference package's own `blake2b-round.h` and
-`blake2b-load-neon.h`: twelve rounds unrolled, sigma resolved at compile time,
-no lane inserts. It is correct -- 630 core and 45,531 prefix checks against
-libsodium -- and **slower still**, 187 ns against the looped kernel's 144.
-
-The cause is register pressure. Holding m0..m7 live across all twelve rounds
-alongside eight row registers and the temporaries exhausts aarch64's 32 vector
-registers: the unrolled kernel touches all 32 and spills 49 times against the
-looped kernel's 12. `-O3` and `-Os` do not change it. This is the same failure
-mode recorded for scalar unrolling in docs/INTERNALS.md.
-
-The reference package's own NEON implementation, measured directly on this
-core in a separate harness, comes to 359 ns/digest against 158 for its own
-scalar reference -- a 2.3x loss for expert-written, fully-unrolled code. So the
-loss is a property of this core, and the gather strategy was a second-order
-term rather than the cause.
+Both NEON kernels are correct and both lose to the scalar compression on an
+Apple M4 Pro:
 
 | kernel | ns/digest |
 |---|--:|
-| uniblake scalar | 90 |
-| uniblake NEON, looped | 144 |
-| uniblake NEON, unrolled | 187 |
-| reference package NEON (own harness) | 359 |
-| reference package scalar (own harness) | 158 |
+| scalar (`src/compress.c`) | 90 |
+| `compress_neon.c`, looped rounds | 144 |
+| `compress_neon_unrolled.c`, unrolled | 187 |
 
-Conclusion: on this core, no BLAKE2b NEON arrangement tested beats scalar.
-Keep both kernels as measured evidence; adopt neither here.
+Two properties account for it. BLAKE2b's G function exposes only two
+independent 64-bit lanes within one message, so a 128-bit register buys one
+doubling while wide scalar issue already extracts more. And the unrolled form
+costs rather than saves: holding the eight message vectors live across twelve
+rounds alongside the row registers exhausts aarch64's 32 vector registers, so
+it spills 49 times against the looped kernel's 12. `-O3` and `-Os` do not
+change that.
 
-The kernel is kept because it is correct, measured, and the right starting
-point on a core where scalar is weaker. It should not be adopted without
-measuring there.
+The sign of the first term depends on the core, so both kernels are kept:
+correct, measured, and the right starting point where scalar is weaker. Adopt
+neither without measuring there.
 
-Where SIMD does pay for BLAKE2b is across *independent* messages — one hash
-per lane rather than one hash split over lanes. That is an AVX2-shaped
-approach and needs a batch-aware compression interface this prototype does not
-have; `ub_hash_n` is the entry point where such an implementation belongs.
+Where SIMD pays for BLAKE2b is across *independent* messages -- one hash per
+lane rather than one hash split over lanes. That needs a batch-aware
+compression interface these prototypes do not have; `ub_hash_n` is the entry
+point where such an implementation belongs.
 
 ## Threading scales, because the digests are independent
 
@@ -113,19 +80,3 @@ than idling.
 
 Below `UB_THREAD_MIN` (512) digests the range runs inline — thread creation
 costs more than the work.
-
-## Where to source a kernel
-
-Only two of these matter to someone writing a backend here:
-
-- **libsodium** — its `crypto_generichash*` BLAKE2b carries SSSE3/SSE4.1/AVX2
-  compress paths behind a function-pointer install, the same replaceable-kernel
-  seam this directory uses. It is the donor to start from for x86, and the
-  conformance oracle for `make check`.
-- **`blake2b_simd`** (Rust) — has a `hash_many` batch API, the closest existing
-  thing to the lane-per-message approach described above. Read it for the
-  interleave structure, not to link against.
-
-Which implementations are still maintained, who wrote them, and how the
-alternatives compare as dependencies belong to the program's BLAKE record,
-not here -- those facts age on a different clock than this code.

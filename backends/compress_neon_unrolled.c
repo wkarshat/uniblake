@@ -1,12 +1,11 @@
 /* AArch64 NEON compression, unrolled, using the reference package's round and
  * message-load macros.
  *
- * The difference from compress_neon.c is the message schedule. That kernel
- * indexes ub_sigma at runtime and builds each message vector one lane at a
- * time -- about five instructions per vector, eight vectors per round, twelve
- * rounds. Here the twelve rounds are unrolled and each vector is assembled by
- * LOAD_MSG_r_n from message words already in registers, so the sigma
- * permutation is resolved at compile time and no lane inserts remain.
+ * The twelve rounds are unrolled and each message vector is assembled by
+ * LOAD_MSG_r_n from words already in registers, so the sigma permutation is
+ * resolved at compile time and no lane inserts remain. compress_neon.c takes
+ * the other approach, indexing ub_sigma at runtime; it measures faster on this
+ * core because the unrolled form spills. See backends/README.md.
  *
  * Donor macros are vendored under backends/vendor; see its README for source,
  * pin and license. Only the surrounding kernel -- the multi-block loop, the
