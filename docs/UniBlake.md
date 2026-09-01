@@ -1,20 +1,21 @@
 # UniBlake
 
-## Where BLAKE2b comes from
+## What BLAKE2b gives a caller
 
-BLAKE2 (2012) is a refinement of BLAKE, a SHA-3 finalist, by Aumasson,
-Neves, Wilcox-O'Hearn and Winnerlein. It kept BLAKE's security margin while
-cutting rounds and dropping padding overhead, on the argument that a hash
-which is fast in software discourages people from reaching for faster but
-weaker constructions. BLAKE2b is the 64-bit variant: 128-byte blocks, digests
-up to 64 bytes. RFC 7693 specifies it, and the reference implementation at
-github.com/BLAKE2/BLAKE2 defines the API most libraries follow.
+BLAKE2b is the 64-bit BLAKE2 variant: 128-byte blocks, digests of 1 to 64
+bytes, specified by RFC 7693.
+
+Its distinguishing feature is the **parameter block** -- 64 bytes of "what am
+I computing" (digest length, key length, salt, personalization, tree layout)
+mixed into the initial state rather than into the message. Two hashes with
+different personalization strings are unrelated functions, at no cost per
+message. This is why BLAKE2b is common in protocol work: domain separation is
+free and built in.
 
 ### Two things called "the reference"
 
-RFC 7693 carries sample code in Appendix A, and the authors maintain a
-separate implementation at github.com/BLAKE2/BLAKE2. They are not the same
-API, and the difference decides what a caller can express.
+Two C implementations are both called "the reference", and the difference
+decides what a caller can express.
 
 | | RFC 7693 Appendix A | author reference |
 |---|---|---|
@@ -36,14 +37,9 @@ shape, means this one.
 
 uniblake follows the author reference for the interface and cites RFC 7693 for
 the algorithm. `compat/ub_rfc.h` adapts the Appendix-A shape for callers that
-have it hard-coded.
+have it hard-coded, and `compat/ub_blake2.h` aliases the author reference's
+own names.
 
-Its distinguishing feature is the parameter block — 64 bytes of "what am I
-computing" (digest length, key length, salt, personalization, tree layout)
-mixed into the initial state rather than into the message. Two hashes with
-different personalization strings are unrelated functions, at no cost per
-message. This is why BLAKE2b is common in protocol work: domain separation is
-free and built in.
 
 ## Why this library exists
 
@@ -107,10 +103,10 @@ needing tree modes want the reference implementation.
 construction and is not provided; a caller needing a longer stream should use
 a construction designed for it.
 
-**No BLAKE2s, no BLAKE3.** BLAKE2s (32-bit words, 64-byte blocks) suits small
-machines and short digests; BLAKE3 replaces the parameter block with three
-fixed modes and is intrinsically parallel. Both are different algorithms, not
-options here.
+**No other algorithms.** BLAKE2b only. The 32-bit variant, the extendable
+output construction, and the tree modes are different functions, not options;
+the scope is settled rather than open. A caller who wants one of them wants a
+different library.
 
 **No shared segment except at the start.** This is inherent, not a shortcut:
 the state depends on every byte absorbed so far, so in `varying || fixed` the
@@ -143,7 +139,7 @@ one that is pure convenience; it exists because that case is overwhelmingly
 common.
 
 `ub_hash_tail` — the general prefix form. Trailing bytes are whatever the
-caller has: a nonce, a sparse index, a string. `ub_hash_n` cannot express it,
+caller has: a counter, a sparse index, a string. `ub_hash_n` cannot express it,
 because `ub_hash_n` generates its own tails.
 
 `ub_hash_n` — a run of consecutive counters. A loop over `ub_hash_tail` gives
@@ -160,18 +156,3 @@ one-compression digests.
 Removing any of the three hashing calls forces a caller into a slower or more
 error-prone shape; adding a fourth would duplicate one of them.
 
-## Sizing
-
-One rule governs the prefix case:
-
-    pending(prefixlen) + taillen <= 128
-    pending(n) = n ? ((n - 1) % 128) + 1 : 0
-
-BLAKE2b keeps a *full* trailing block rather than compressing it, because
-finalization has to mark the last block. A prefix that is an exact multiple of
-128 therefore leaves 128 bytes pending and admits no tail at all — hash one
-byte less, or accept two compressions per digest.
-
-## Where to go next
-
-The README lists the other documents and who they are for.

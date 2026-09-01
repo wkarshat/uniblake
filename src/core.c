@@ -1,8 +1,22 @@
 /* Streaming core. See include/uniblake/uniblake.h. */
 #include "internal.h"
+#include <stddef.h>   /* offsetof, in the C99 alignment fallback */
 
 size_t ub_state_size(void)  { return sizeof(struct ub_state); }
+
+/* _Alignof is C11. Under a strict C99 compiler fall back to the offset trick,
+ * which is well defined here: the struct's strictest member is uint64_t, so
+ * the padding a leading char forces equals the alignment. Both paths report
+ * the same value on every target checked; ub_state_align() is computed at
+ * runtime precisely so a caller never has to know which was used. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 size_t ub_state_align(void) { return _Alignof(struct ub_state); }
+#else
+size_t ub_state_align(void) {
+  struct probe { char c; struct ub_state s; };
+  return offsetof(struct probe, s);
+}
+#endif
 
 void ub_param_init(ub_param *P, size_t digest_length) {
   /* Returns void, so the handler is the only channel available here.
@@ -39,6 +53,13 @@ int ub_init_param(ub_state *S, const ub_param *P) {
     return ub_err(UB_E_ARG, __func__, "digest_length must be 1..64");
   if (P->key_length > UB_KEYBYTES)
     return ub_err(UB_E_ARG, __func__, "key_length above 64");
+
+  /* The serialized block is exactly the 64 bytes RFC 7693 s2.5 specifies, and
+   * every offset below is written against that. A build where this is false
+   * would silently produce wrong digests, so fail at compile time instead.
+   * Written as a negative array size rather than a division so it stays
+   * warning-clean on compilers that object to a bool operand. */
+  (void)sizeof(int[UB_OUTBYTES == 64 ? 1 : -1]);
 
   uint8_t blk[UB_OUTBYTES];
   memset(blk, 0, sizeof blk);
@@ -78,11 +99,16 @@ int ub_init_key(ub_state *S, size_t outlen, const void *key, size_t keylen) {
   P.key_length = (uint8_t)keylen;
   int rc = ub_init_param(S, &P);
   if (rc != UB_OK) return rc;
+#if UB_WIPE
+  S->keyed = 1;   /* ub_init_param zeroed the state, so set this after it */
+#endif
   /* The key is absorbed as one zero-padded block (RFC 7693 §2.9). */
   uint8_t blk[UB_BLOCKBYTES];
   memset(blk, 0, sizeof blk);
   memcpy(blk, key, keylen);
-  return ub_update(S, blk, UB_BLOCKBYTES);
+  int krc = ub_update(S, blk, UB_BLOCKBYTES);
+  ub_wipe(blk, sizeof blk);   /* the caller's key, on our stack */
+  return krc;
 }
 
 /* Eager: a whole pending block is compressed as soon as it is complete AND
@@ -113,6 +139,25 @@ int ub_update(ub_state *S, const void *in, size_t inlen) {
   return UB_OK;
 }
 
+#if UB_WIPE
+/* Out of line so ub_final's body stays free of the volatile indirect call,
+ * which inhibits optimization of whatever contains it.
+ *
+ * On cost: bench/bench_prefix.c shows this branch at ~8 ns/digest, but that
+ * is an artifact of its loop, where ub_final would otherwise inline and fold
+ * away. Measured against a full init/update/final cycle the unkeyed path
+ * pays 1.7 ns (172.8 -> 174.5), and the keyed path 17.7 ns for the wiping it
+ * actually does. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+static void wipe_secrets(struct ub_state *S, uint8_t *d) {
+  ub_wipe(d, UB_OUTBYTES);
+  ub_wipe(S->h, sizeof S->h);
+  ub_wipe(S->buf, sizeof S->buf);
+}
+#endif
+
 int ub_final(ub_state *S, void *out, size_t outcap) {
   if (!S || !out) return ub_err(UB_E_ARG, __func__, "NULL state or output");
   if (outcap < S->outlen)
@@ -127,6 +172,18 @@ int ub_final(ub_state *S, void *out, size_t outcap) {
   uint8_t d[UB_OUTBYTES];
   for (int i = 0; i < 8; ++i) ub_store64(d + i * 8, S->h[i]);
   memcpy(out, d, S->outlen);
+
+  /* Wiping is spent only where there is a secret to protect: a keyed state,
+   * whose chaining value and pending block are derived from the caller's key.
+   * Unkeyed hashing of public data never wipes.
+   *
+   * Only the secret-bearing fields are cleared. t, f, buflen and outlen stay,
+   * so the finalized() guard above still rejects a second ub_final -- zeroing
+   * the whole struct would clear f[0] and silently re-enable it. `d` holds all
+   * 64 bytes even when outlen is shorter, so it is cleared too. */
+#if UB_WIPE
+  if (S->keyed) wipe_secrets(S, d);
+#endif
   return UB_OK;
 }
 

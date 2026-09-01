@@ -29,6 +29,21 @@ extern "C" {
  * It also sets the limit on the fast path in prefix.h — a digest costs one
  * compression only while the bytes still pending plus the new bytes fit
  * inside one block. */
+/* Whether ub_final clears a keyed state's secret material before returning.
+ *
+ * On by default: a caller hashing with a key should not have to know to ask.
+ * Build the library AND its callers with -DUB_WIPE=0 to compile it
+ * out entirely -- no branch, no flag in the state -- which suits a consumer
+ * hashing only public data, where the cost buys nothing.
+ *
+ * Digests are identical either way. This changes what is left in memory after
+ * ub_final, not what is computed. It affects the layout of the opaque state,
+ * so a library and a caller built with different settings must not be mixed;
+ * ub_state_size() reports the size actually compiled. */
+#ifndef UB_WIPE
+#define UB_WIPE 1
+#endif
+
 #define UB_BLOCKBYTES     128   /* compression block */
 #define UB_OUTBYTES        64   /* largest digest */
 #define UB_KEYBYTES        64   /* largest key */

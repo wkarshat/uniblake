@@ -51,9 +51,9 @@ collection. Name it for what it manages (`ub_pool`, `ub_tree`), never `state`.
 **(c) It is a composite with parts of independent lifetime.** Contains a state
 *and* something with its own parametrization and lifetime. `blake2xb_state` is
 `{ blake2b_state S[1]; blake2b_param P[1]; }` — the param outlives the inner
-state, which is reinitialized per output block. `blake3_hasher` is
-`{ key[8]; blake3_chunk_state chunk; cv_stack[] }` — the chunk state is reset
-per 1 KiB chunk while the CV stack accumulates across the whole message.
+state, which is reinitialized per output block. A tree hasher pairing a
+per-chunk absorb state with a chaining-value stack that accumulates across the
+whole message is the same shape: two parts on different schedules.
 
 *Test:* if two fields are reset or replaced on different schedules, the
 container is a composite. Name it for the machine (`hasher`, `ub_tree`), and
@@ -72,8 +72,6 @@ Not live: it cannot be updated, only imported. Name it `image` or `snapshot`.
 | `blake2bp_state` | collection | (b) — `blake2b_state S[4][1]` + root |
 | `blake2sp_state` | collection | (b) — 8 lanes |
 | `blake2xb_state` | composite | (c) — state + param, different lifetimes |
-| `blake3_chunk_state` | **state** | cv, counter, buf, flags — one chunk's absorb state |
-| `blake3_hasher` | composite | (c) — chunk state (per-chunk) + CV stack (per-message) + key (per-init) |
 | libsodium `crypto_generichash_blake2b_state` | **state** | opaque `unsigned char[384]`; a `blake2b_state` behind a fixed-size array |
 | uniblake snapshot image | snapshot | (d) — `ub_export`/`ub_import` |
 
@@ -84,13 +82,12 @@ test (a) — fixed at init, never written by update. They live inside the state
 because `final` needs them and the reference API gives `final` no other way
 to receive them.
 
-This is worth stating rather than hiding: **`blake2b_state` is a state with
-two parameter fields embedded for API convenience.** It is why
-`sizeof(blake2b_state)` is not the mathematical state, and why uniblake's
-drop of `last_node` is a scope decision, not a correctness one.
-
-BLAKE3 removed the impurity: no `outlen` in the hasher, because output length
-is chosen at `finalize` rather than `init`.
+**`blake2b_state` is a state with two parameter fields embedded for API
+convenience.** That is why `sizeof(blake2b_state)` is not the mathematical
+state, and why uniblake's drop of `last_node` is a scope decision, not a
+correctness one. A design that
+chose the output length at `final` rather than at `init` would not carry
+`outlen` at all.
 
 ### 5. What a caller can rely on
 
@@ -182,7 +179,7 @@ library, and have the host call `ub_kernel_set()` with the result at startup.
 That keeps the probe reusable and keeps the library free of platform
 detection.
 
-Note that ISA support is the wrong question to ask it. The same NEON code
+ISA support is the wrong question to ask it. The same NEON code
 measures faster than scalar on some ARM cores and slower on others — measured
 here at 1.5x slower — so a probe that answers "has NEON" selects wrongly. What
 a selector needs is the core identity plus a list of cores where a given
@@ -232,25 +229,46 @@ from.
 | finalizing without copying the whole state | ~1%, inside noise |
 | column-major working vector | no change (95.2-96.7 ns either way) |
 
-Unrolling is the notable one, and the reason is register pressure, not code
-size. The compiled body grows from 996 bytes to 8,912 — still far inside this
-core's 192 KB L1 instruction cache, so instruction fetch is not the problem.
-What changes is spilling: the rolled loop has **no** stack traffic at all,
-while the unrolled body has 398 stack loads and stores. The working vector is
-sixteen 64-bit words plus sixteen message words, already more than the 31
-general-purpose registers; the rolled loop keeps one round's values live at a
-time and fits, while the unrolled body presents the allocator with twelve
-rounds' worth at once and it spills.
-
-Since the rolled loop already spills nothing, layout changes aimed at the
-allocator have nothing to recover — which is why the column-major experiment
-measured no difference.
-
-This matches `-O3` measuring slower than `-O2` on the same code.
+Unrolling loses to **register pressure**, not code size. Sixteen working
+words plus sixteen message words already exceed the 31 general-purpose
+registers: the rolled loop keeps one round live and spills nothing, while the
+unrolled body presents twelve rounds at once and spills. Same reason `-O3`
+measures slower than `-O2` here. Because the rolled loop spills nothing,
+layout changes aimed at the register allocator have nothing to recover --
+which is why the column-major experiment measured flat.
 
 The lesson for a replacement: gains come from doing fewer or wider operations,
 not from unrolling or from alignment hints. That means SIMD across independent
 messages, or threads, not a differently-shaped scalar loop.
+
+### Secret material after finalization
+
+A keyed state's chaining value and pending block are derived from the caller's
+key, so `ub_final` clears them, along with the digest staging buffer, which
+holds all 64 bytes even when the digest is shorter. Only those fields: the
+counter, flags and lengths stay, because the flags are what reject a second
+`ub_final` on the same state -- zeroing the whole struct would silently
+re-enable it.
+
+Unkeyed states are not wiped. There is no secret to protect, and the check is
+one predictable branch.
+
+Build with `-DUB_WIPE=0` to compile the whole thing out -- no branch,
+no flag in the state -- which is the right setting for a consumer hashing only
+public data, where the clearing buys nothing. Digests are identical either
+way; the setting changes what is left in memory after `ub_final`, not what is
+computed. It does change the layout of the opaque state, so the library and
+its callers must agree on it. `make check-wipe-modes` runs the oracle suites
+both ways.
+
+Clearing goes through `ub_wipe`, which calls `memset` through a `volatile`
+function pointer so the store cannot be eliminated as dead. That is the
+portable form: no `memset_s`, no OS-specific call, no inline assembly, so it
+survives compilers that reject GNU asm syntax. It is defence in depth rather
+than a guarantee -- the standard does not promise the bytes are unrecoverable
+from a register or a swapped page.
+
+Verified zeroed at `-O2`, `-O3` and `-Os` on two compilers.
 
 ### Reading a performance number
 
@@ -296,9 +314,17 @@ on a vectorised one.
 
 ### Requirements
 
-C99, plus `_Alignof` for `ub_state_align()`. No POSIX, no allocation, no
-threads, no floating point. Endian-neutral: all serialization is explicit
-byte-shifting, so the library runs unchanged on big-endian targets.
+C99. `ub_state_align()` uses `_Alignof` where C11 is available and the
+`offsetof` probe otherwise; both report the same value, which is why the
+alignment is queried at runtime rather than compiled in. No POSIX, no
+allocation, no threads, no floating point.
+
+Endian-neutral by construction: all serialization is explicit byte-shifting,
+so the library runs unchanged on big-endian targets. Note what that claim
+rests on -- it is a property of the code, not a test result, because the
+conformance suites have only been run on little-endian hardware. A
+cross-compile to a big-endian target is the cheap way to raise that from
+argument to evidence.
 
 Freestanding builds need `memcpy`, `memset`, and — unless the default error
 handler is replaced — `fprintf`/`stderr`.
@@ -308,10 +334,78 @@ handler is replaced — `fprintf`/`stderr`.
 `ub_state_size()` and `ub_state_align()` are reported at runtime and are not
 part of the ABI. Do not embed a literal.
 
+`make check-sanitize` runs the oracle suites under AddressSanitizer and
+UndefinedBehaviorSanitizer together, at `-O1 -g`. Not part of `make check`:
+it is a separate build and roughly twice as slow, so it is run deliberately
+rather than on every change.
+
+`make check-portable` compiles the library under both C99 and C11 with
+`-Wall -Wextra -Wpedantic` and requires zero warnings. Point `CC2` at a
+second compiler to widen it: `make check-portable CC2=gcc-16`. A warning is
+a failure there, because the standards claim above is only worth what the
+strictest available compiler says about it.
+
+### The platform matrix
+
+Four machines are available: this Apple Silicon Mac, Ubuntu 18.04, Ubuntu
+24.04, and an HP Windows 11 laptop. That is enough to cover every axis that
+has historically broken a BLAKE2 implementation except one, and the gap is
+worth naming rather than papering over.
+
+What each unit is *for* -- one distinct risk apiece, so none is redundant:
+
+| unit | covers | why it is not substitutable |
+|---|---|---|
+| Apple Silicon Mac | arm64, clang, 64-bit LP64 | the only arm64; also the only Apple toolchain |
+| Ubuntu 24.04 | x86-64, current GCC, current glibc | the only current mainstream Linux |
+| Ubuntu 18.04 | old GCC, old glibc, C99-era defaults | the only old toolchain; catches reliance on newer compiler behaviour |
+| Windows 11 (HP) | MSVC, Windows LLP64, MinGW | the only non-POSIX target and the only LLP64 data model |
+
+**LLP64 is the one that earns Windows a slot.** On Windows `long` stays 32
+bits while pointers are 64, so any assumption that `long` holds a pointer or a
+`size_t` breaks there and nowhere else in this set. The narrowed `buflen` and
+`outlen` fields and the `size_t` casts around them are exactly the code that
+would show it.
+
+**Ubuntu 18.04 is not nostalgia.** Its GCC defaults to an older standard and
+ships a glibc without newer built-ins, which is what catches an accidental
+dependency on a modern compiler being generous. The `_Alignof` fallback exists
+for precisely this case.
+
+The realistic order on each unit, cheapest first. README carries the
+per-platform invocations, including the `EXE` suffix native Windows needs;
+this is what to run and what each step buys.
+
+1. `make check-portable CC2=<other compiler>`. Compiles only, so it is fast,
+   and it catches the largest class of problem: a construct one toolchain
+   accepts and another rejects.
+2. `make check`, needing libsodium on that unit. The real evidence -- byte
+   agreement against an independent implementation, on that machine.
+3. `make check-wipe-modes`, wherever `ub_final` or the state layout changed.
+4. `make check-sanitize` on the two Ubuntu units, where ASan and UBSan are
+   best supported.
+5. `make bench`, recorded with the machine, compiler, and flags. Never compare
+   a figure across units.
+
+On Windows run (1) and (2) twice, once under MSVC and once under MinGW.
+
+Cross-compiling from Linux to Windows is worth doing for step (1) -- it proves
+the code reaches the target -- but it does not substitute for (2). Only running
+the suites on the target shows the digests are right there, and a
+cross-compiled binary needs Wine or the actual machine to run.
+
+**The gap this matrix cannot close: big-endian.** All four units are
+little-endian, so the endian-neutrality claim above stays an argument about
+the code rather than a test result. Closing it needs a cross-compiler
+(`gcc-powerpc-linux-gnu` on either Ubuntu unit) and, to actually execute
+rather than merely compile, QEMU. Compile-only is worth doing anyway -- it is
+one package and one `make` -- but note that it proves less than it appears to,
+and say so when reporting it.
+
 ### Bringing up a new platform
 
-1. `make check` — 630 core + 45,535 prefix + adapter conformance. All must
-   pass before any optimization work.
+1. `make check` — core, prefix and adapter conformance. All must pass before
+   any optimization work.
 2. `make bench` — establishes the baseline ns/digest on the target.
 3. Replace the kernel (previous section) and re-run both.
 
@@ -392,15 +486,10 @@ per digest against 1.
 
 ## Per workload
 
-Nanoseconds per digest are hard to weigh. The same numbers as the hashing time
-for one proof-of-work solve, at two common parameter sets:
+Nanoseconds per digest are hard to weigh. The same numbers as total hashing
+time for a batch, at two sizes:
 
-| parameters | digests per solve |
-|---|--:|
-| (192, 7) | 16,777,216 |
-| (200, 9) | 1,048,576 |
-
-| build | (192,7) hashing | (200,9) hashing |
+| build | 16.8M digests | 1.05M digests |
 |---|--:|--:|
 | libsodium | 4.8 s | 0.30 s |
 | uniblake scalar | 1.6 s | 0.10 s |
@@ -408,16 +497,17 @@ for one proof-of-work solve, at two common parameter sets:
 | uniblake, 4 threads | 0.44 s | 0.027 s |
 | uniblake, 8 threads | 0.22 s | 0.014 s |
 
-These are the hashing phase only, and they are a **lower bound**: a solver also
-copies the state per digest, writes each result into its own layout, and
-extracts more than one hash from each digest. Measured inside one such solver,
-libsodium costs 337 ns per call against the 285 ns here — 18% more — so expect
-the same margin on top of every row.
+These are the hashing phase only, and they are a **lower bound**: a real
+caller also copies the state per digest, writes each result into its own
+layout, and often extracts more than one field per digest. Measured inside one
+such caller, libsodium costs 337 ns per call against the 285 ns here -- 18%
+more -- so expect the same margin on top of every row.
 
-Against a whole solve of 8.3 s, of which 5.7 s was hashing, replacing the hash
-alone predicts:
+The lesson is Amdahl's law, and it decides whether this work is worth doing.
+Against a whole operation of 8.3 s, of which 5.7 s was hashing, replacing the
+hash alone predicts:
 
-| build | solve | speedup |
+| build | total | speedup |
 |---|--:|--:|
 | libsodium (baseline) | 8.3 s | 1.00x |
 | uniblake scalar | 4.3 s | 1.95x |
@@ -425,18 +515,24 @@ alone predicts:
 | uniblake, 8 threads | 2.9 s | 2.90x |
 
 Threading past four threads gains little because the hashing phase is no
-longer the limit: at 8 threads it is 0.22 s of a 2.9 s solve. Everything
+longer the limit: at 8 threads it is 0.22 s of a 2.9 s total. Everything
 beyond that is in the code that consumes the digests.
 
 ## Conformance
 
-| suite | checks | needs an oracle | covers |
-|---|--:|---|---|
-| `tests/test_core.c` | 630 | yes | streaming, parameters, keys, the RFC vector |
-| `tests/test_prefix.c` | 45,531 | yes | prefix geometry, counters, slices, batching |
-| `tests/test_api.c` | 24 | no | return codes, call ordering, the error handler |
-| `compat/test_compat.c` | 53 | yes | the libsodium adapter |
-| `tests/test_negative.c` | 7 | yes | that the checks above can fail |
+| suite | oracle | covers |
+|---|---|---|
+| `tests/test_core.c` | libsodium | streaming, parameters, keys, the RFC vector |
+| `tests/test_prefix.c` | libsodium | prefix geometry, counters, slices, batching |
+| `tests/test_api.c` | none | return codes, call ordering, the error handler |
+| `compat/test_compat.c` | libsodium | the libsodium adapter |
+| `compat/test_blake2_alias.c` | vendored reference | the `blake2.h` alias shim |
+| `tests/test_negative.c` | libsodium | that the checks above can fail |
+
+Coverage is exhaustive over the ranges that matter rather than sampled: every
+message length from empty to past two blocks, every digest length the
+parameter block admits, every key length, many update chunkings, and the whole
+prefix geometry range including the boundary cases where no tail fits.
 
 `tests/test_negative.c` links a compression function with one round removed and
 requires every oracle comparison — the RFC vector, unkeyed, keyed,
@@ -449,3 +545,8 @@ The NEON and threaded backends pass `tests/test_core.c` and
 
 Oracle is libsodium — an independent implementation. `include/` and `src/`
 link nothing.
+
+`compat/test_blake2_alias.c` is the exception: its oracle is the BLAKE2
+author reference itself, vendored and renamed under `compat/ref`, so it runs
+without libsodium. An alias shim has to match the implementation it is
+aliasing, which makes that the right oracle for it.

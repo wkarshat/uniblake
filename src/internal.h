@@ -10,6 +10,7 @@
 #include "uniblake/uniblake.h"
 #include <string.h>
 
+
 /* Everything one hashing computation carries between calls.
  *
  * h, t, f, buf and buflen all change as the message is absorbed. `outlen`
@@ -24,8 +25,16 @@ struct ub_state {
   uint64_t t[2];                 /* message byte counter */
   uint64_t f[2];                 /* finalization flags */
   uint8_t  buf[UB_BLOCKBYTES];   /* pending block; bytes >= buflen unused */
-  size_t   buflen;
-  size_t   outlen;
+  /* buflen is at most 128 and outlen at most 64, so both fit a byte. Narrow
+   * rather than size_t so that `keyed` costs nothing: they share one 8-byte
+   * slot. Every comparison against these casts to size_t first -- see the
+   * underflow notes in prefix.c. */
+  uint8_t  buflen;
+  uint8_t  outlen;
+#if UB_WIPE
+  uint8_t  keyed;                /* set by ub_init_key; selects wiping in
+                                  * ub_final */
+#endif
 };
 
 extern const uint64_t ub_iv[8];
@@ -113,6 +122,23 @@ typedef void (*ub_compress_fn)(struct ub_state *S, const uint8_t *blocks,
   void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks);
 #endif
 void ub_compress_final(struct ub_state *S, const uint8_t *block);
+
+/* Zeroing that survives dead-store elimination.
+ *
+ * A plain memset on a buffer that is never read again is dead by the
+ * compiler's reckoning and may be removed entirely, leaving key material or a
+ * truncated digest's unused bytes in memory. Calling memset through a
+ * volatile function pointer forces the call: the pointer must be re-read, so
+ * the call cannot be proved unnecessary. This is the portable form -- it
+ * needs no memset_s, no OS-specific SecureZeroMemory, and no inline asm, so
+ * it works on compilers that reject GCC asm syntax.
+ *
+ * Defence in depth, not a guarantee: the C standard does not promise the
+ * bytes are unrecoverable from registers or a swapped page. */
+static inline void ub_wipe(void *p, size_t n) {
+  static void *(*const volatile memset_v)(void *, int, size_t) = &memset;
+  memset_v(p, 0, n);
+}
 
 static inline uint64_t ub_load64(const uint8_t *p) {
   return (uint64_t)p[0]        | ((uint64_t)p[1] <<  8) |

@@ -245,6 +245,47 @@ int main(void){
     ok(ub_hash_n(S,4,0,1,(size_t)-1,4,out,32)==UB_E_ARG,
                                         "hash_n rejects off SIZE_MAX"); }
 
+  /* Secret material after ub_final. The state is opaque, so this searches its
+   * raw bytes for the key rather than naming fields: a keyed state must not
+   * still contain the key-derived chaining value, an unkeyed one is left
+   * alone, and both must still refuse a second ub_final. */
+  { unsigned char key[32], msg[200], dg[64];
+    for (size_t i=0;i<sizeof key;i++) key[i]=(unsigned char)(0xA5^i);
+    for (size_t i=0;i<sizeof msg;i++) msg[i]=(unsigned char)(i*3+1);
+
+    /* Snapshot the pre-final chaining value by finalizing a copy, then check
+     * the original's bytes changed where the secret lived. */
+    ub_state *K = aligned_alloc(ub_state_align(), ub_state_size());
+    ub_state *C = aligned_alloc(ub_state_align(), ub_state_size());
+    ub_init_key(K,32,key,sizeof key); ub_update(K,msg,sizeof msg);
+    ub_copy(C,K);
+    ub_final(C,dg,sizeof dg);              /* C is wiped */
+    ub_final(K,dg,sizeof dg);              /* K is wiped */
+
+    const unsigned char *kb=(const unsigned char*)K;
+    int nonzero=0; for(size_t i=0;i<ub_state_size();i++) if(kb[i]) nonzero=1;
+    ok(nonzero, "keyed state keeps its flags after final");
+
+    /* The 64-byte chaining value sits at offset 0. Whether it is cleared is
+     * the build's choice; the second-final guard must hold either way. */
+    int h_clear=1; for(size_t i=0;i<64;i++) if(kb[i]) h_clear=0;
+#if UB_WIPE
+    ok(h_clear, "keyed state clears the chaining value on final");
+#else
+    ok(!h_clear, "keyed state keeps the chaining value when wiping is off");
+#endif
+    ok(ub_final(K,dg,sizeof dg)==UB_E_STATE,
+                                        "keyed state still rejects a second final");
+
+    ub_state *U = aligned_alloc(ub_state_align(), ub_state_size());
+    ub_init(U,64); ub_update(U,msg,sizeof msg); ub_final(U,dg,sizeof dg);
+    const unsigned char *ub=(const unsigned char*)U;
+    int u_clear=1; for(size_t i=0;i<64;i++) if(ub[i]) u_clear=0;
+    ok(!u_clear, "unkeyed state is not wiped");
+    ok(ub_final(U,dg,sizeof dg)==UB_E_STATE,
+                                        "unkeyed state rejects a second final");
+    free(K); free(C); free(U); }
+
   printf("api: checks=%d fails=%d -> %s\n",checks,fails,fails?"FAIL":"PASS");
   free(big);
   return fails!=0;

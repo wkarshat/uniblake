@@ -1,7 +1,20 @@
 # uniblake
 
-BLAKE2b in portable C, with a fast path for hashing many messages that begin
-with the same bytes.
+BLAKE2b in portable C, for callers who need more than a one-shot hash:
+
+- **Eager absorption, guaranteed.** Whole blocks are compressed as soon as
+  more input follows, so a shared prefix is absorbed once. The standard API
+  cannot express this and gives no diagnostic when an implementation does the
+  opposite.
+- **Controlled access to the internals.** The parameter block, the prefix and
+  batch layer, a replaceable compression kernel, runtime-reported state size
+  and alignment. Every entry point validates and returns a code; diagnosis is
+  opt-in and costs nothing when unused.
+- **Portable by construction.** C99, endian-neutral, no allocation, no POSIX,
+  no threads, no floating point. Conformance is checked against an independent
+  oracle, not asserted.
+
+BLAKE2b only. Other algorithms are out of scope, not pending.
 
 ## What it does
 
@@ -60,25 +73,129 @@ make check      # conformance suites
 make bench      # measurements
 ```
 
-`make check` and `make bench` need libsodium, which they use as an independent
-reference; the library itself links nothing. Point at a non-default install
-with `make check SODIUM=/opt/homebrew`.
+The library needs a C99 compiler and nothing else. `make check` and `make
+bench` additionally need libsodium, used as an independent reference; point at
+a non-default install with `SODIUM=<prefix>` — ideally the build the consuming
+project already uses, so conformance is measured against the implementation
+being replaced. `make check-alias` needs no libsodium at all.
+
+Test and bench binaries are written to `build/` in the tree, which is
+gitignored and removed by `make clean`. Four variables cover the rest:
+
+| variable | default | set it when |
+|---|---|---|
+| `SODIUM` | `/usr/local` | libsodium is elsewhere |
+| `EXE` | empty | executables need a suffix (native Windows) |
+| `CC`, `AR` | `cc`, `ar` | cross-compiling, or selecting a second compiler |
+| `BUILD` | `build` | the output should go somewhere else |
+
+The Makefile recipes are POSIX shell — no bash extensions — so they run under
+whatever `/bin/sh` a platform provides, including `dash` and MSYS2. Nothing
+needs bash to be installed.
+
+### Per platform
+
+**Linux.** Install libsodium headers (`libsodium-dev` on Debian and Ubuntu,
+`libsodium-devel` on Fedora), then:
+
+```
+make && make check SODIUM=/usr
+```
+
+`/usr` is where a distribution package lands; a source build defaults to
+`/usr/local`.
+
+**Windows via WSL.** Identical to Linux — WSL is Linux. The one thing to get
+right is where the checkout lives: keep it on the WSL filesystem
+(`~/uniblake`), not under `/mnt/c`. Building across the Windows filesystem
+boundary is slow enough to be worth avoiding, and file-mode handling there
+differs.
+
+```
+sudo apt install build-essential libsodium-dev
+make && make check SODIUM=/usr
+```
+
+From PowerShell without leaving it, `wsl -e` runs the same commands:
+
+```powershell
+wsl -e make check SODIUM=/usr
+```
+
+**Windows 11, native.** The Makefile needs a POSIX shell and `ar`, which
+PowerShell and `cmd` do not provide. Install MSYS2 and drive it from
+PowerShell, which keeps one terminal for everything:
+
+```powershell
+winget install MSYS2.MSYS2
+$msys = "C:\msys64\usr\bin\bash.exe"
+& $msys -lc "pacman -S --noconfirm mingw-w64-x86_64-gcc make mingw-w64-x86_64-libsodium"
+& $msys -lc "cd /c/path/to/uniblake && make CC=gcc EXE=.exe"
+& $msys -lc "cd /c/path/to/uniblake && make check CC=gcc EXE=.exe SODIUM=/mingw64"
+```
+
+`-lc` runs a login shell so the MinGW toolchain is on `PATH`. `EXE=.exe` is
+the only Windows-specific setting; `build/` works unchanged.
+
+MSVC cannot build this Makefile, so an MSVC check means compiling `src/*.c`
+into your own project or a direct `cl` invocation. The sources are MSVC-clean:
+the one compiler-specific construct is guarded. Worth doing where MSVC is a
+target — it and MinGW disagree often enough that passing one says little about
+the other.
+
+**Linux to Windows, cross-compiled.** Produces Windows binaries on a Linux
+host. The library cross-compiles cleanly because it links nothing; the test
+suites need a libsodium built for the same target, so without one, cross-check
+what does not need it and run the rest natively:
+
+```
+sudo apt install gcc-mingw-w64-x86-64
+make CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar
+make check-alias CC=x86_64-w64-mingw32-gcc EXE=.exe   # needs Wine to run
+```
+
+Cross-*compiling* proves the code is portable to the target; it does not prove
+the digests are right there. Only running the suites on the target does that.
+The commands above are the shape of the work, not a transcript: they have not
+been exercised on this machine, which has no MinGW toolchain installed.
 
 ## Documentation
 
-| | |
-|---|---|
-| [docs/UniBlake.md](docs/UniBlake.md) | what it is and why the repeated case needs a guarantee — start here |
-| [docs/GUIDE.md](docs/GUIDE.md) | for callers: recipes, interface reference, adapters |
-| [docs/INTERNALS.md](docs/INTERNALS.md) | for implementers: state, compression backends, porting, measurements |
-| [docs/CPP.md](docs/CPP.md) | the C++ wrapper, and the two BLAKE2 reference lineages |
-| [docs/INTEGRATING.md](docs/INTEGRATING.md) | swapping the hash in an existing codebase: validation and measurement order |
+Each document owns a question and carries that topic whole.
+
+| document | owns | read it when |
+|---|---|---|
+| **README** (this file) | what the library is, its scope, how to build it, where everything lives | first |
+| [docs/UniBlake.md](docs/UniBlake.md) | *why* — the design argument: what BLAKE2b guarantees, what it does not, and what this library adds | deciding whether to use it |
+| [docs/GUIDE.md](docs/GUIDE.md) | *how to call it* — recipes, interface reference, sizing rules, adapters, the C++ wrapper | writing calling code |
+| [docs/INTERNALS.md](docs/INTERNALS.md) | *how it works* — state, the compression kernel, porting, measurements | replacing a kernel or porting |
+| [docs/INTEGRATING.md](docs/INTEGRATING.md) | *how to adopt it* — swapping the hash in an existing codebase, in a validated order | migrating a consumer |
+
+### What does not go in these documents
+
+Four kinds of material are absent because their lifecycle is not this
+library's: they change on a different cadence, and a copy here goes stale
+without anything failing to signal it.
+
+- **History and provenance.** Contributor names, commit dates, upstream
+  maintenance status. License and pin lines on vendored files are the
+  exception.
+- **Rejected and parked work.** `docs/INTERNALS.md` keeps only the short list
+  that stops a reader repeating a measured mistake.
+- **Other algorithms.** Named once in `docs/UniBlake.md` as a scope boundary,
+  never compared.
+- **Named downstream projects.** A consumer's domain is its own; examples
+  here are generic.
+
+A number that would go stale needs a command that regenerates it. Prefer
+"run `make check`" over quoting a check count.
 
 ## Drop-in use
 
 Header-only adapters let existing call sites work unchanged:
 
 - `compat/ub_sodium.h` — libsodium's `crypto_generichash_blake2b_*`
+- `compat/ub_blake2.h` — the BLAKE2 author reference `blake2.h`
 - `compat/ub_rfc.h` — the RFC 7693 sample-code API
 - `compat/uniblake.hpp` — optional C++11 wrapper (no Boost)
 
@@ -89,7 +206,7 @@ See [docs/GUIDE.md](docs/GUIDE.md#adapters).
 ```
 include/uniblake/   public headers
 src/                implementation
-compat/             adapter headers
+compat/             adapter headers (compat/ref: vendored oracle)
 backends/           alternative NEON and threaded implementations
 tests/  bench/      conformance, measurement
 docs/
@@ -103,6 +220,23 @@ nothing else.
 - [RFC 7693](https://www.rfc-editor.org/rfc/rfc7693) — the BLAKE2 specification
 - [BLAKE2 reference implementation](https://github.com/BLAKE2/BLAKE2) — `blake2.h`, the API this one follows
 - [libsodium](https://libsodium.org) — used as the conformance oracle, and adapted by `compat/ub_sodium.h`
+
+## Size and coverage
+
+The only place these numbers appear. They change; `make check` and `wc` are
+the authorities.
+
+| | |
+|---|--:|
+| library source (`include/` + `src/`) | 795 lines |
+| conformance checks in `make check` | 47,590 |
+| suites | 5, plus a negative suite that must fail |
+| build dependencies | none |
+| test dependencies | libsodium, for four of the five suites |
+
+The negative suite links a compression function with one round removed and
+requires every oracle comparison to reject it: a suite that cannot fail proves
+nothing.
 
 ## License
 

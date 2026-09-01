@@ -72,7 +72,9 @@ Worked sizes, 128-byte block:
 | 260 | 4 | 124 |
 
 `ub_prefix_check` returns `UB_E_GEOMETRY` rather than silently costing two
-compressions. Call it once after absorbing the prefix.
+compressions. Call it once after absorbing the prefix: whether the geometry
+serves a workload is then a fact known at startup rather than a slowdown found
+later.
 
 ### Recipe 3 — consecutive counter tails
 
@@ -98,7 +100,7 @@ ub_hash_n(S, 4, i, 1, out, outcap, outcap);
 
 ### Recipe 4 — prefix changes, parameters do not
 
-When the prefix changes (a new nonce, a new header), re-absorb:
+When the prefix changes, re-absorb:
 
 ```c
 ub_init_param(S, &P);            /* same P */
@@ -166,9 +168,9 @@ interpreted. The library never aborts or exits.
 
 # Interface reference
 
-BLAKE2b for consensus code. Minimal core mirroring the normative reference,
-one optional layer for repeated-prefix hashing, and room to grow into
-parallel and offload backends without changing the core.
+A minimal core mirroring the normative reference, one optional layer for
+repeated-prefix hashing, and room to grow into parallel and offload backends
+without changing the core.
 
 ### 1. Naming
 
@@ -333,8 +335,8 @@ a device transfer.
 
 For device backends the state must be transferable: `ub_export` / `ub_import`
 (versioned byte image) serialize a prefix-absorbed state to upload. GPU
-implementations already do this by hand -- nheqminer uploads
-`sizeof(u64) * 8` bytes of the chaining value.
+implementations already do this by hand, uploading the eight chaining-value
+words directly.
 
 ### 6. Why the prefix layer exists
 
@@ -389,7 +391,7 @@ so `state_b = state_a;` copies it. `ub_state` is opaque and has no assignable
 value type; that becomes `ub_copy(&b, &a)`.
 
 Conformance: `compat/test_compat.c` checks the adapter against real
-libsodium across digest lengths, key lengths 1–64, and salt/personalization.
+libsodium across digest lengths, key lengths, and salt/personalization.
 
 ### RFC 7693 sample code
 
@@ -405,7 +407,11 @@ than 64 bytes gets no diagnosis. Prefer the core API where possible.
 
 ### BLAKE2 reference (`blake2.h`)
 
-No adapter is needed; the mapping is by name.
+`compat/ub_blake2.h`
+
+uniblake already follows this API's names and argument order, so the shim is
+aliases rather than translation. Include it instead of `blake2.h` and
+sequential BLAKE2b call sites compile unchanged.
 
 | reference | uniblake |
 |---|---|
@@ -423,6 +429,77 @@ and `sizeof(ub_param)` is not part of the interface.
 
 The reference's `blake2b_state` carries a `last_node` field used only for tree
 hashing; `ub_state` omits it.
+
+Not covered, because it cannot be shimmed: `blake2bp`, `blake2sp` and
+`blake2s` are different algorithms or tree modes; assigning one state to
+another becomes `ub_copy`, the one unavoidable source change.
+
+Conformance: `compat/test_blake2_alias.c` (`make check-alias`) checks the
+shim against the vendored reference itself, across digest lengths, message
+lengths, key lengths, and the salt/personalization parameter block. The oracle
+is vendored under `compat/ref`, so this suite needs no libsodium.
+
+### C++ wrapper
+
+`compat/uniblake.hpp` -- header-only, C++11, no Boost. Optional: nothing in
+`include/` or `src/` requires it, and the C interface works unchanged from
+C++. It exists because three things are awkward at a C++ call site --
+allocating aligned storage by hand, checking a return code on every call where
+the surrounding code uses exceptions, and proving to a reader that a shared
+prefix state is not modified.
+
+```cpp
+#include "uniblake.hpp"
+
+uniblake::Params P(48);
+P.personal("my-app-v1");
+
+uniblake::Prefix pre(P, header.data(), header.size(), /*max_tail=*/4);
+
+auto digests = pre.hash_n(0, count);                // count digests, packed
+auto field   = pre.hash_n_field(0, count, 24, 24);  // one 24-byte field of each
+```
+
+`Prefix` absorbs the leading bytes once in its constructor and exposes only
+const methods, so sharing one across threads is a property of the type. The
+constructor runs the geometry check and throws if the sizes cannot give
+one-compression digests -- a mistake otherwise found at the first hashing
+call.
+
+`State` owns aligned storage and is copyable, with copy meaning what `ub_copy`
+means: the computation continues independently on both sides. That makes the
+long-tail case ordinary C++:
+
+```cpp
+auto st = pre.resume();      // a copy of the prefix state
+st.update(part1); st.update(part2);
+auto digest = st.final(48);
+```
+
+Errors are exceptions at construction and in the value-returning helpers,
+because that is where a C++ caller cannot inspect a return code.
+`uniblake::Error` carries the `ub_status`, so a caller that wants the code
+still has it. The C interface never throws, so a hot loop where failure is
+impossible by construction can call `ub_hash_n` directly while using `Prefix`
+for setup.
+
+The wrapper uses `<memory>`, `<vector>`, `<string>`, `<stdexcept>`. A codebase
+preferring optional-returns over exceptions can write that variant over the
+same C calls.
+
+Where a digest length or personalization is fixed at compile time, a class
+template keeps it there:
+
+```cpp
+template <unsigned N>
+struct Params {
+    static_assert(N % 8 == 0, "N must be a whole number of bytes");
+    static uniblake::Params make() {
+        uniblake::Params P((512 / N) * N / 8);
+        return P.personal("my-app-v1");
+    }
+};
+```
 
 ### Writing a new adapter
 

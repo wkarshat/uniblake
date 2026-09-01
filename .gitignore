@@ -1,2 +1,27 @@
+# Build output. `make` writes .o beside sources and the archive at the root;
+# test and bench binaries go to /tmp, so nothing else is generated in-tree.
 *.o
 *.a
+build/
+
+# Agent scratch
+agent.prompt
+prompt.txt
+throw/
+
+.claude
+.codex
+.codess
+.cursor
+.vscode
+
+*.bak
+*.rej
+*.orig
+*.log
+*~
+.*.swp
+
+# Mac
+.DS_Store
+**/.DS_Store

@@ -8,7 +8,7 @@ checked with the same suites as the shipped code.
 | `compress_neon.c` | `ub_compress` | drop `src/compress.c`, add this |
 | `hash_n_threads.c` | `ub_hash_n` | `-DUB_HASH_N_SERIAL -DUB_THREADS=N`, add this, `-lpthread` |
 
-Both pass `tests/test_core.c` (630) and `tests/test_prefix.c` (45,531).
+Both pass the core and prefix suites unchanged.
 
 ## Measurements
 
@@ -59,23 +59,18 @@ than idling.
 Below `UB_THREAD_MIN` (512) digests the range runs inline — thread creation
 costs more than the work.
 
-## Distributions surveyed as alternatives to libsodium
+## Where to source a kernel
 
-From the BLAKE reference notes, for anyone weighing a dependency:
+Only two of these matter to someone writing a backend here:
 
-- **libsodium** — maintained fork of the reference lineage behind
-  `crypto_generichash*`, runtime CPU dispatch. Full parameter block. Used here
-  as the conformance oracle.
-- **BLAKE2 reference** (`github.com/BLAKE2/BLAKE2`) — the definitive C
-  implementation, with SSE/AVX variants and `blake2bp` for parallel hashing.
-- **OpenSSL** — BLAKE2b-512/BLAKE2s-256 since 1.1.0, EVP-only, no
-  salt/personalization at the legacy API, so it cannot serve callers that need
-  domain separation.
-- **`blake2b_simd`** (Rust) — independent implementation with AVX2/SSE4.1 and
-  runtime detection, plus a `hash_many` batch API: the closest existing thing
-  to the lane-per-message approach described above.
-- **`blake2`** (RustCrypto) — pure Rust from the specification, trait-shaped,
-  the most-used BLAKE2 crate.
-- **CPython `hashlib.blake2b`** — the fullest parameter-block exposure of any
-  mainstream API; useful for generating test vectors.
-- **`blake2-rfc`** — unmaintained since 2017; historical only.
+- **libsodium** — its `crypto_generichash*` BLAKE2b carries SSSE3/SSE4.1/AVX2
+  compress paths behind a function-pointer install, the same replaceable-kernel
+  seam this directory uses. It is the donor to start from for x86, and the
+  conformance oracle for `make check`.
+- **`blake2b_simd`** (Rust) — has a `hash_many` batch API, the closest existing
+  thing to the lane-per-message approach described above. Read it for the
+  interleave structure, not to link against.
+
+Which implementations are still maintained, who wrote them, and how the
+alternatives compare as dependencies belong to the program's BLAKE record,
+not here -- those facts age on a different clock than this code.
