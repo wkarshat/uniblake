@@ -73,7 +73,8 @@ extern const uint8_t  ub_sigma[12][16];
  *      caller does not touch S->t: every block handed here is counted here.
  *
  *   2. Run the RFC 7693 §3.2 compression: initialise the 16-word working
- *      vector from S->h, the IV, S->t and S->f, apply twelve rounds, and fold
+ *      vector from S->h, the IV, S->t and the `last` argument, apply twelve
+ *      rounds, and fold
  *      the halves back into S->h with the feed-forward XOR.
  *
  * Read S->h, S->t and S->f. Write only S->h and S->t. Do not touch S->buf,

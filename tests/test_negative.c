@@ -31,16 +31,16 @@
     b = ub_rotr64(b ^ c, 63);                              \
   } while (0)
 
-void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks) {
-  for (size_t n = 0; n < nblocks; ++n) {
-    S->t[0] += UB_BLOCKBYTES; S->t[1] += (S->t[0] < UB_BLOCKBYTES);
-    const uint8_t *block = blocks + n * UB_BLOCKBYTES;
+/* `last` is the finalization mask, passed in rather than read from the state:
+ * the state carries no f[] words. Mirrors src/compress.c. */
+static void bad_block(struct ub_state *S, const uint8_t *block, uint64_t last) {
+  {
     uint64_t m[16], v[16];
     for (int i = 0; i < 16; ++i) m[i] = ub_load64(block + i * 8);
     for (int i = 0; i < 8;  ++i) v[i] = S->h[i];
     v[ 8] = ub_iv[0]; v[ 9] = ub_iv[1]; v[10] = ub_iv[2]; v[11] = ub_iv[3];
     v[12] = ub_iv[4] ^ S->t[0]; v[13] = ub_iv[5] ^ S->t[1];
-    v[14] = ub_iv[6] ^ S->f[0]; v[15] = ub_iv[7] ^ S->f[1];
+    v[14] = ub_iv[6] ^ last;    v[15] = ub_iv[7];
     for (int r = 0; r < 11; ++r) {          /* <-- one round short */
       G(r,0, v[0],v[4],v[ 8],v[12]);  G(r,1, v[1],v[5],v[ 9],v[13]);
       G(r,2, v[2],v[6],v[10],v[14]);  G(r,3, v[3],v[7],v[11],v[15]);
@@ -50,11 +50,14 @@ void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks) {
     for (int i = 0; i < 8; ++i) S->h[i] ^= v[i] ^ v[i + 8];
   }
 }
+void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks) {
+  for (size_t n = 0; n < nblocks; ++n) {
+    S->t[0] += UB_BLOCKBYTES; S->t[1] += (S->t[0] < UB_BLOCKBYTES);
+    bad_block(S, blocks + n * UB_BLOCKBYTES, 0);
+  }
+}
 void ub_compress_final(struct ub_state *S, const uint8_t *block) {
-  uint64_t s0 = S->t[0], s1 = S->t[1];
-  S->t[0] -= UB_BLOCKBYTES; S->t[1] -= (s0 < UB_BLOCKBYTES);
-  ub_compress(S, block, 1);
-  S->t[0] = s0; S->t[1] = s1;
+  bad_block(S, block, (uint64_t)-1);
 }
 
 /* --- the checks that must reject it --- */

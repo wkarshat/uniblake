@@ -38,9 +38,21 @@ extern "C" {
  * hashing only public data, where the cost buys nothing.
  *
  * Digests are identical either way. This changes what is left in memory after
- * ub_final, not what is computed. It affects the layout of the opaque state,
- * so a library and a caller built with different settings must not be mixed;
- * ub_state_size() reports the size actually compiled. */
+ * ub_final, not what is computed.
+ *
+ * It does NOT change ub_init_key's handling of the caller's key: that is
+ * burned from the stack unconditionally. Only the final-state wipe is
+ * conditional.
+ *
+ * Mixing a library and a caller built with different settings is still
+ * forbidden -- the setting adds a field to the state -- though on LP64 the
+ * field currently lands in existing padding and ub_state_size() reports 232
+ * either way. Do not rely on that; ub_state_size() reports what was actually
+ * compiled and is the only sound source.
+ *
+ * Cost, measured on an Apple M4 Pro over 60 alternating pairs: the unkeyed
+ * path pays under 0.14 ns for the branch (95% CI [-0.14, +0.10], unresolved),
+ * so UB_WIPE=0 is a footprint choice rather than a speed one. */
 #ifndef UB_WIPE
 #define UB_WIPE 1
 #endif

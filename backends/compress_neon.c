@@ -15,6 +15,7 @@
  *
  *   141  original: scalar m[16] array, vector literals {m[a],m[b]}
  *   136  this one: message left in memory, pairs built with dup + lane load
+ *   164  this one, but sigma resolved at compile time (12 literal ROUNDs)
  *   163  the above, twelve rounds unrolled with literal sigma indices
  *   163  same, pairs via vcombine_u64(vcreate_u64(..), ..)
  *   163  same, pairs via dup + lane load
@@ -24,6 +25,12 @@
  * message is gathered -- the opposite of the scalar kernel, where it gained
  * 11%. And tbl beats a pair of ext for the byte rotations despite its higher
  * nominal latency, because ext needs the halves split and recombined.
+ *
+ * Literal sigma indices are not separable from unrolling here: each round's
+ * MP() operands differ, so twelve bodies get emitted (157 -> 1056
+ * instructions, 0 -> 24 spill stores) and the 9 sigma byte-loads they remove
+ * do not pay for that. This is the opposite of src/compress.c and the reason
+ * the AVX2 donor's sigma-free LOAD_MSG shape does not port to aarch64.
  *
  * The gather is the remaining cost: only 3 of 96 sigma pairs are adjacent in
  * memory, so a pair-load fast path buys nothing.
@@ -71,11 +78,10 @@ static inline uint64x2_t rot63(uint64x2_t v){
     t_ = vextq_u64(d0,d1,1);                            \
     d1 = vextq_u64(d1,d0,1); d0 = t_; }while(0)
 
-void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks){
-  for (size_t k = 0; k < nblocks; ++k) {
-    S->t[0] += UB_BLOCKBYTES;
-    S->t[1] += (S->t[0] < UB_BLOCKBYTES);
-    const uint8_t *B = blocks + k * UB_BLOCKBYTES;
+/* `last` is the finalization mask, an argument rather than state: the state
+ * carries no f[] words. Mirrors src/compress.c. */
+static void neon_block(struct ub_state *S, const uint8_t *B, uint64_t last){
+  {
 
     const uint64_t *M = (const uint64_t *)(const void *)B;
 #define MP(x,y) vld1q_lane_u64(&M[y], vld1q_dup_u64(&M[x]), 1)
@@ -84,7 +90,7 @@ void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks){
     uint64x2_t b0 = vld1q_u64(&S->h[4]), b1 = vld1q_u64(&S->h[6]);
     uint64x2_t c0 = vld1q_u64(&ub_iv[0]), c1 = vld1q_u64(&ub_iv[2]);
     uint64_t tf[4] = { ub_iv[4]^S->t[0], ub_iv[5]^S->t[1],
-                       ub_iv[6]^S->f[0], ub_iv[7]^S->f[1] };
+                       ub_iv[6]^last,    ub_iv[7] };
     uint64x2_t d0 = vld1q_u64(&tf[0]), d1 = vld1q_u64(&tf[2]);
 
     /* Rows: a=(v0,v1) a1=(v2,v3), b=(v4,v5) b1=(v6,v7),
@@ -116,10 +122,14 @@ void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks){
   }
 }
 
+void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks){
+  for (size_t k = 0; k < nblocks; ++k) {
+    S->t[0] += UB_BLOCKBYTES;
+    S->t[1] += (S->t[0] < UB_BLOCKBYTES);
+    neon_block(S, blocks + k * UB_BLOCKBYTES, 0);
+  }
+}
 void ub_compress_final(struct ub_state *S, const uint8_t *block){
-  uint64_t s0 = S->t[0], s1 = S->t[1];
-  S->t[0] -= UB_BLOCKBYTES; S->t[1] -= (s0 < UB_BLOCKBYTES);
-  ub_compress(S, block, 1);
-  S->t[0] = s0; S->t[1] = s1;
+  neon_block(S, block, (uint64_t)-1);
 }
 #endif

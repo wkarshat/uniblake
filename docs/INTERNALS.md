@@ -7,6 +7,220 @@ Callers want GUIDE.md instead.
 
 ---
 
+# How this kernel behaves
+
+Things that turned out to be true about BLAKE2b on this code, with the
+command that shows each one. Not a log of what was tried -- the point is the
+mechanism, so the next person reasons from it instead of re-measuring.
+
+**Reproduce:** `make kernel-stats` (what the compiled kernel does),
+`make bench-phases` (where a digest's time goes), `make bench-compare`
+(against libsodium, comparable to the Rust harness), `make ab` (A/B two
+binaries with a resolution verdict -- required for any performance claim).
+
+**Before tuning anything, read `docs/CONSUMERS.md`** (and
+`docs/API_PROPOSAL.md` for the changes it argues for): it records what the
+Zcash consumers actually call, which decides what is a hot path and what is a
+conformance obligation. Keyed hashing is the latter -- no Zcash call site uses
+it. **On x86-64, read `docs/X86.md` first**: several results below are
+aarch64 codegen results and are expected to differ.
+
+### AArch64 folds the last round's rotate away for free
+
+BLAKE2b's output is `h[i] ^= v[i] ^ v[i+8]`, which reads **all sixteen** `v`
+words -- no G call in round 12 is dead. What *is* removable is the closing
+`b = ror(b^c, 63)` of the final round's **diagonal** half: those values flow
+straight into the XOR, so the rotate can ride along with it.
+
+clang already does this. `make kernel-stats` reports 96 each of
+`ror #16/#24/#32` but only **92** of `ror #63`, and 4 fused rotates -- the
+missing four appear as `eor x9, x9, x17, ror #63`, AArch64's free
+shifted-operand form. Writing the deferral explicitly in C produces
+**byte-identical assembly**.
+
+This is a property of the *instruction set*, not of BLAKE2b. x86-64 has no
+shifted-operand `xor`, so there the four rotates are real `rorq`
+instructions and the transformation is unexplored. In a vector kernel it
+matters more again: `ror 63` has no single-instruction form
+(`vpaddq`+`vpsrlq`+`vpor`), so deferring the final round's is removing the
+most expensive rotate in the kernel across every lane. See
+`Requihash/BLAKE/OPTIMIZATIONS.md` §2b.
+
+### Unrolling wins here, and the mechanism is the sigma lookup
+
+Not register pressure. `ub_sigma` is `extern`, so a rolled loop cannot fold
+`ub_sigma[r][2*i]` even once `r` is known: every message word costs an
+address computation and a byte load. Hand-unrolling substitutes literals at
+all 96 call sites and the loads disappear -- `sigma ldrb` goes 9 to **0**,
+which `make kernel-stats` prints directly.
+
+Spilling *falls* when you unroll, because the freed address registers are
+worth more than the extra live values cost. That is the opposite of the usual
+intuition and is why `#pragma clang loop unroll(full)` measures *slower*: it
+replicates the body but leaves the lookup, paying the code growth without
+collecting the saving.
+
+### Spilling is real but small, and easy to overcount
+
+Every round consumes all sixteen message words, so 16 `m` + 16 `v` = 32 live
+64-bit values against 31 general-purpose registers. Some spilling is forced.
+
+Measured, it is minor: **0.15 spill operations per rotate**. The number is
+easy to inflate three ways, all of which `tools/kernel_stats.py` separates:
+
+- **Callee-saved registers.** 47 of the stack operations are x19-x28/x29/x30
+  save and restore -- paid once per call, not per round. Counting them with
+  the spills roughly doubles the apparent rate.
+- **Stores are not pairs.** The 15 stores are 15 *distinct slots*, each
+  written once: the allocator evicts a value and then re-reads it, which is
+  where the 42 loads come from. A store:load ratio is not a spill count.
+- **Inbound arguments.** 8 slots are read but never written -- message words
+  arriving in the caller's frame, not spills at all.
+
+Because the rate is already this low, allocator-aimed rewrites have little to
+recover: variants using named locals instead of `v[16]`, or re-loading message
+words from the block instead of holding `m[16]`, all land within 0.5 ns.
+
+### Passing state as separate arrays costs more than mutating it
+
+`ub_final` mutates `S->t`, `S->f` and `S->buf` in place. Hoisting `h`, `t` and
+`f` into locals and passing them to the kernel separately -- the shape
+`uniblake-rs` uses, where `State::finalize` takes `&self` -- measures
+**~1.7 ns slower**, and `make kernel-stats` shows why: spill traffic rises
+from 15/42 to **17/48**. Three independent pointers can alias where one
+`struct ub_state *` cannot, so the compiler reloads more conservatively.
+
+The Rust form is right for Rust, where `&self` is also what makes a prefix
+state shareable without a copy. It does not follow that it is right for C, and
+here it is not.
+
+### The finalization flag does not have to live in the state -- measured
+
+C carries `f[2]`, 16 bytes of a 232-byte state. `uniblake-rs` carries no flag:
+`compress` takes `last: bool`. The Rust shape ports to C cleanly, and was
+built and measured rather than argued about:
+
+- `f[1]` is the tree-hashing last-node flag. This library hashes
+  sequentially, so it is always zero and the kernel can hardcode it.
+- `f[0]` is doing two jobs: the finalization mask the kernel XORs, and the
+  marker that makes a second `ub_final` fail. Split them -- pass the mask to
+  the kernel, keep a one-byte `fin` for the guard. That byte is free: it
+  shares the slot `buflen`/`outlen`/`keyed` already occupy.
+
+Result: **state 232 -> 216 bytes, identical to the Rust layout**, all suites
+passing. Measured with `tools/ab_compare.py` at 24 alternating pairs:
+
+| | difference | 95% CI |
+|---|--:|---|
+| state copy | **-0.13 ns** | [-0.14, -0.10] |
+| full leaf | **-0.43 ns** | [-0.86, -0.05] |
+
+Both intervals exclude zero, so both are resolved. An earlier pass at six
+samples reported "no change" for the leaf; that was an under-sampled null, not
+a result -- see *Saying what a measurement can support*.
+
+Worth knowing for two reasons. It is the correct layout -- the flag is a
+property of one compression, not of the state between absorbs, which is the
+definition this document opens with. And it sets the scale: **shrinking the
+state is not where leaf time is**. Anyone reaching for the state size as an
+optimisation should read that 0.09 first.
+
+Not adopted here only because it changes a documented 232-byte public ABI;
+`ub_state_size()` exists precisely so callers do not embed the literal, so
+this is a decision about compatibility, not about speed.
+
+### One struct pointer beats four array pointers
+
+Two Rust design differences were ported to C. The state-size one above is a
+small win. The other -- `State::finalize` taking `&self` and working on local
+copies of `h`/`t`/`f`, with a kernel that takes them as separate arguments --
+measured **+2.12 ns slower**, 95% CI [+1.76, +2.25] over 24 alternating
+pairs.
+
+`make kernel-stats` locates it: spill traffic rises from **15/42 to 17/48**.
+
+The cause is register occupancy, not aliasing. `restrict` on all four
+pointers was tried and changed **nothing** -- still 17/48 -- which rules the
+aliasing explanation out. What the assembly shows is argument lifetime: the
+split kernel keeps four incoming pointer registers live to the end of the
+function, where `compress_block(struct ub_state *S, const uint8_t *block)`
+needs one base register and reaches every field at a fixed offset from it.
+Three registers permanently occupied is three fewer for the 32 live 64-bit
+values the algorithm already cannot fit, so the allocator evicts two more and
+re-reads them six more times.
+
+**The general form:** on a register-starved kernel, passing a group of values
+behind one struct pointer is not just tidier -- each extra pointer argument
+costs a register for the whole function. Rust pays nothing here because
+`&self` is a single pointer too; it is the *split into separate arrays* that
+costs, not the immutability.
+
+### A compression timed alone is not a component of a digest### A compression timed alone is not a component of a digest### A compression timed alone is not a component of a digest
+
+`make bench-phases` reports an incremental build-up -- copy, copy+update, full
+leaf -- so each stage is a difference between measured totals. It prints
+`ub_compress` in a tight loop separately and **deliberately refuses to
+subtract it**: the isolated loop gets better branch prediction and cache
+behaviour, and measures *higher* (74.0) than the increment `ub_final` actually
+adds (73.1). Summing the parts overshoots the whole.
+
+So: finalization dominates the leaf, and the compression dominates
+finalization, but no fixed percentage is attributable to the kernel. Any claim
+of the form "N% is compression" is an artifact of measuring it in isolation.
+
+### Saying what a measurement can support
+
+"No change", "within noise" and "unchanged" are not measurements. Each claims
+that two things are equal, which is a much stronger statement than the data
+usually carries -- and it is the statement that stops further investigation,
+so it is the one most worth getting right.
+
+The failure is concrete. Removing `f[2]` was reported as "79.4 both,
+differences within noise" from six single runs. At 24 alternating pairs the
+same change resolves cleanly at **-0.43 ns, 95% CI [-0.86, -0.05]**. The
+effect was always there; the harness could not see it, and the write-up
+converted "could not see" into "is not there".
+
+Use `tools/ab_compare.py`. It alternates A and B rather than batching them
+(thermal and frequency drift over a session is monotonic and would otherwise
+land entirely on whichever ran second), discards the first pair, and reports a
+bootstrap interval on the **paired** difference. Pairing is what makes small
+effects visible: the `f[2]` result resolves a 0.43 ns difference against a
+3.87 ns within-variant spread, because drift affects both members of a pair
+equally and cancels.
+
+Three rules follow:
+
+- If the interval spans zero, write **"unresolved at N pairs"**, with N. That
+  is a statement about the harness and invites someone to raise N. "No change"
+  is a claim about the code and closes the question.
+- Quote the interval, not a bare median. `-0.43 ns [-0.86, -0.05]` and
+  `-0.43 ns [-2.10, +1.20]` are the same median and opposite conclusions.
+- Never state one number for two variants. Reporting "79.4 both" asserts an
+  exact equality that no measurement produces; at minimum one of the two
+  figures is being rounded into agreement with the other.
+
+Design decisions inherit the weakest measurement behind them. An ABI change
+justified by "no change" is justified by nothing.
+
+### Benchmarks lie in three specific ways here
+
+Each of these produced a wrong published number before it was caught:
+
+- **Position in the run.** The first timed block after an idle machine runs
+  ~2.5x slow and decays over milliseconds. It is positional, not per
+  implementation: reordering the harness moves the penalty to whichever block
+  now runs first. Both harnesses spin 300 ms before timing.
+- **Timer against work.** A single 1 KiB hash is below clock resolution and
+  reported an identical, implausibly round 1024 MB/s for two different
+  implementations. Small inputs are repeated until the timed region is >= 20 ms.
+- **Counting assembly with regexes.** Rotate immediates print as `#63` from the
+  compiler and `#0x3f` from `objdump`; `ror` also appears inside register
+  names. `tools/kernel_stats.py --self-test` asserts each of these, and runs as
+  part of `make kernel-stats`.
+
+---
+
 # State
 
 A naming rule is worthless if "state" can mean four things. This fixes the
@@ -214,48 +428,29 @@ Two cautions from the BLAKE2b record:
 - A hash speedup caps out at the share of runtime the hash occupies. If
   hashing is a fifth of a workload, a 2x hash is a 1.2x workload at best.
 
-### Code-shape changes that were tried and rejected
+### Changes that measured flat
 
-Measured on an Apple M4 Pro, prefix-digest shape, median of 9 runs of 400k
-digests. A digest costs 98 ns, of which the single block compression is 79%
-and the state copy 2%; the compression is where any real gain has to come
-from.
+Recorded only so they are not retried; none of them moved the digest more than
+~0.5 ns, and the reason is in *Spilling is real but small* above -- there is
+little for an allocator-aimed rewrite to recover.
 
 | change | result |
 |---|---|
-| `#pragma clang loop unroll(full)` on the 12-round loop | **27% slower** (98 -> 114 ns; stack traffic 0 -> 398) |
-| hand-unrolling with literal sigma indices | **11% faster** (89 -> 79 ns) -- adopted, see below |
-| the same plus `__builtin_assume_aligned` on the block | 27% slower |
-| hoisting the message-schedule row out of the round | no change |
-| finalizing without copying the whole state | ~1%, inside noise |
-| column-major working vector | no change (95.2-96.7 ns either way) |
+| `g()` as an inline function, rounds unrolled | unresolved at 4 pairs (|d| < 0.5 ns) |
+| `v` as sixteen named locals rather than `v[16]` | unresolved at 4 pairs (|d| < 0.5 ns) |
+| message words re-loaded from the block instead of `m[16]` | unresolved at 4 pairs; assembly identical, so no effect is expected |
+| hoisting the message-schedule row out of the round | unresolved (historical, sample count not recorded) |
+| column-major working vector | unresolved (historical, sample count not recorded) |
+| `__builtin_assume_aligned` on the block | unresolved (historical, sample count not recorded) |
 
-The two unrolling results look contradictory and are not. `#pragma unroll`
-replicates the loop body but leaves `ub_sigma[r][2*i]` as a runtime lookup: the
-array is `extern`, so the compiler cannot fold the index even once `r` is
-known. The result is twelve copies of the same address arithmetic, more
-register pressure and no saving.
+None of these has been re-run under `tools/ab_compare.py`. "Unresolved" here
+means the harness of the day could not separate them, **not** that they are
+known equal; a 0.4 ns effect like the `f[2]` removal would have been missed by
+every one of these tests.
 
-Hand-unrolling substitutes the sigma values as literals at each of the 96
-call sites, so the message word is addressed directly. Measured on an Apple
-M4 Pro:
-
-| | rolled | hand-unrolled |
-|---|--:|--:|
-| ns/digest | 89 | **79** |
-| `ldrb` (sigma loads) | 9 | **0** |
-| spills per rotate | 0.62 | **0.29** |
-| `__TEXT` | 996 B | 6,240 B |
-
-The byte-load count is the mechanism: the lookups disappear entirely.
-Spilling *falls* rather than rises, because the freed address registers are
-worth more than the extra live values cost. Code size grows 6x but remains 3%
-of this core's 192 KB L1i.
-
-The earlier conclusion -- that unrolling loses to register pressure, and that
-gains must come from wider operations -- was drawn from the `#pragma` result
-alone and did not hold. It is kept above as a measured fact about that
-specific change.
+Two that did move it, both explained above: hand-unrolling with literal sigma
+indices (**11% faster**, adopted) and `#pragma clang loop unroll(full)`
+(**27% slower**, rejected).
 
 ### Secret material after finalization
 

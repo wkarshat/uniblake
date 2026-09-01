@@ -52,29 +52,46 @@ single dependent chain and stays at scalar speed.
 
 Measured in a VM; re-measure on the target.
 
-## The scalar kernel now sets a higher bar
+## Why the scalar unrolling win does not transfer to NEON
 
 `src/compress.c` was hand-unrolled with literal sigma indices and moved from
 89 to 79.2 ns/digest. The tables below are re-measured against it.
 
-The change identifies a defect these kernels share.
-`compress_neon.c` still reads `ub_sigma[r]` inside its round loop and builds
-each message vector one lane at a time. In scalar, removing exactly that cost
-11% and *reduced* spilling, because the address registers freed outweighed the
-extra live values. The NEON kernel has never been tried with the permutation
-resolved at compile time.
+The change suggested a defect these kernels might share.
+`compress_neon.c` reads `ub_sigma[r]` inside its round loop and builds each
+message vector one lane at a time. In scalar, removing exactly that cost 11%
+and *reduced* spilling, because the address registers freed outweighed the
+extra live values.
 
-The vendored AVX2 donor already does this: `blake2b-load-avx2.h` contains zero
-references to sigma, resolving all twelve rounds through 48
-`BLAKE2B_LOAD_MSG_r_n` macros. That is the shape to copy, and it is the reason
-the donor is worth vendoring rather than writing a kernel from scratch.
+**Tried on NEON, and it does not transfer.** Resolving the permutation at
+compile time -- twelve `ROUND()` invocations with literal indices, gather
+otherwise unchanged -- passes every suite and measures **163.6 ns against the
+shipped kernel's 136.0**. It does remove the sigma loads exactly as intended:
+read from the generated code, all 9 `ldrb` become 0. It also takes the body
+from 157 instructions to 1056 and introduces 24 spill stores where the looped
+kernel has none.
 
-A caveat before assuming this transfers. An unrolled NEON kernel *was* built
-and measured slower -- 187 ns against the looped kernel's 144 -- and removed;
-recover it from the `neon-both-kernels` tag. But that kernel unrolled the
-rounds while still assembling message vectors by lane insert, so it paid the
-code growth without collecting the saving. Whether literal-index loads change
-the result is untested.
+The reason the scalar result does not carry over is that on NEON the two
+changes are inseparable. Literal indices *are* unrolling here: each round's
+`MP()` operands differ, so the compiler cannot share one body across rounds,
+and the twelve copies exceed the 32 vector registers. In scalar the
+permutation was folded into addressing that the register allocator then had
+fewer, not more, values to track. That asymmetry, not the gather strategy, is
+what separates the two kernels.
+
+So the vendored AVX2 donor's shape -- `blake2b-load-avx2.h` has zero sigma
+references, resolving all twelve rounds through 48 `BLAKE2B_LOAD_MSG_r_n`
+macros -- is **not** the shape to copy on aarch64. It works on x86-64, where
+AVX2 has 16 wider registers holding twice the lanes per register, so twelve
+unrolled rounds fit where on NEON they spill. Any future NEON work should
+start from the looped kernel, not the donor.
+
+This also supersedes the earlier register-pressure explanation for the 187 ns
+unrolled variant (recoverable from the `neon-both-kernels` tag): that kernel
+spills *less* per instruction than the looped one, and what it added was
+shuffling -- 347 `ext` against 8 `ld1`. Three separate formulations now land
+at 163-187 ns. Unrolling costs 27-51 ns on this core regardless of how the
+message is gathered.
 
 ## NEON is slower than scalar here
 

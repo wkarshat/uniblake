@@ -113,6 +113,34 @@ probe:
 .PHONY: probe
 
 # Prototype backends (see backends/README.md). Not part of `all`.
+bench-phases: | $(BUILD)
+	$(CC) $(CFLAGS) $(INC) bench/bench_phases.c $(SRC) -o $(BUILD)/ub_phases$(EXE)
+	$(BUILD)/ub_phases$(EXE)
+
+# What the compiled kernel actually does: rotate counts, unrolling, spills.
+# tools/kernel_stats.py --self-test guards the counting rules themselves.
+kernel-stats: | $(BUILD)
+	@python3 tools/kernel_stats.py --self-test
+	@$(CC) $(CFLAGS) $(INC) -S -o $(BUILD)/compress.s src/compress.c
+	@python3 tools/kernel_stats.py $(BUILD)/compress.s _compress_block
+
+# What has to change to run kernel-stats on x86-64 or the AVX2 kernel, and
+# why the counts mean different things there. Read before porting.
+kernel-stats-arch:
+	@python3 tools/kernel_stats.py --arch-notes
+
+# A/B two benchmark binaries with a resolution verdict. Use for every
+# performance claim: BIN_A and BIN_B are built benchmark executables.
+#   make ab BIN_A=build/ub_phases BIN_B=/tmp/variant GREP='full leaf'
+GREP ?= full leaf
+ab:
+	@python3 tools/ab_compare.py $(BIN_A) $(BIN_B) --runs $(or $(RUNS),21) --grep '$(GREP)'
+
+bench-compare: sodium-check | $(BUILD)
+	$(CC) $(CFLAGS) $(INC) $(SODINC) bench/bench_compare.c $(SRC) \
+	  $(SODLIB) -lpthread -o $(BUILD)/ub_cmp$(EXE)
+	$(BUILD)/ub_cmp$(EXE)
+
 bench-neon: | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) $(SODINC) bench/bench_prefix.c \
 	  src/core.c src/const.c src/prefix.c backends/compress_neon.c $(SODLIB) -o $(BUILD)/ub_bench_neon$(EXE)

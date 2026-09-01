@@ -35,24 +35,27 @@
 
 #include "vendor/libsodium/blake2b-compress-avx2.h"
 
+/* `last` is the finalization mask, an argument rather than state: the state
+ * carries no f[] words. Mirrors src/compress.c. The donor macro still takes
+ * both flag words, so the second is passed as the constant 0 -- this library
+ * hashes sequentially and never sets the tree last-node flag. */
+static void avx2_block(struct ub_state *S, const uint8_t *block, uint64_t last) {
+  __m256i a = LOADU(&S->h[0]);
+  __m256i b = LOADU(&S->h[4]);
+  BLAKE2B_COMPRESS_V1(a, b, block, S->t[0], S->t[1], last, (uint64_t)0);
+  STOREU(&S->h[0], a);
+  STOREU(&S->h[4], b);
+}
+
 void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks) {
   for (size_t k = 0; k < nblocks; ++k) {
     S->t[0] += UB_BLOCKBYTES;
     S->t[1] += (S->t[0] < UB_BLOCKBYTES);
-
-    __m256i a = LOADU(&S->h[0]);
-    __m256i b = LOADU(&S->h[4]);
-    BLAKE2B_COMPRESS_V1(a, b, blocks + k * UB_BLOCKBYTES,
-                        S->t[0], S->t[1], S->f[0], S->f[1]);
-    STOREU(&S->h[0], a);
-    STOREU(&S->h[4], b);
+    avx2_block(S, blocks + k * UB_BLOCKBYTES, 0);
   }
 }
 
 void ub_compress_final(struct ub_state *S, const uint8_t *block) {
-  uint64_t s0 = S->t[0], s1 = S->t[1];
-  S->t[0] -= UB_BLOCKBYTES; S->t[1] -= (s0 < UB_BLOCKBYTES);
-  ub_compress(S, block, 1);
-  S->t[0] = s0; S->t[1] = s1;
+  avx2_block(S, block, (uint64_t)-1);
 }
 #endif
