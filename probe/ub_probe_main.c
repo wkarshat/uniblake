@@ -39,13 +39,5 @@ int main(void) {
   printf("features   neon=%d sse41=%d avx2=%d avx512f=%d sha_ni=%d\n",
          f.neon, f.sse41, f.avx2, f.avx512f, f.sha_ni);
 
-  /* An ISA flag says an instruction exists, not that a kernel using it is
-   * faster. Both NEON kernels in backends/ are correct and both measure
-   * slower than scalar on this core. */
-  if (f.neon)
-    printf("note       NEON present; measure before selecting a NEON kernel\n");
-  if (f.avx2)
-    printf("note       AVX2 present; no AVX2 kernel exists yet\n");
-
   return 0;
 }

@@ -4,14 +4,10 @@
 CC      ?= cc
 AR      ?= ar
 CFLAGS  ?= -O2 -std=c11 -Wall -Wextra
-# _POSIX_C_SOURCE: the harnesses use clock_gettime and, under -std=c99 where
-# ub_alloc.h falls back from C11 aligned_alloc, posix_memalign. glibc declares
-# both only at >= 200112L; Apple's headers declare them regardless, so omitting
-# this is invisible on macOS and is an implicit declaration on Linux -- a
-# warning under gcc, a hard error under clang. It must be set before any system
-# header is read, which a header included after <stdlib.h> cannot do, so it
-# belongs on the command line. Harmless on Windows, where the branch is
-# _aligned_malloc.
+# _POSIX_C_SOURCE: the harnesses need clock_gettime, and posix_memalign under
+# -std=c99 where ub_alloc.h falls back from C11 aligned_alloc. glibc declares
+# both only at >= 200112L. On the command line, not in a header: it has to
+# precede the first system header, and ub_alloc.h is included after <stdlib.h>.
 INC      = -Iinclude -Isrc -Itests -D_POSIX_C_SOURCE=200112L   # tests/ub_alloc.h, used by every harness
 SRC      = src/core.c src/compress.c src/const.c src/prefix.c
 
@@ -69,9 +65,7 @@ $(LIB): $(OBJ)
 # this, a header change leaves stale objects -- and internal.h defines
 # struct ub_state, so a stale object means a layout mismatch, not a warning.
 # Makefile is a prerequisite so a CFLAGS or rule change rebuilds every object
-# rather than leaving ones compiled with the old flags. It also covers the
-# bootstrap gap in the .d scheme above: an object built before -MMD existed has
-# no .d, so a header edit alone would leave it silently stale.
+# rather than leaving ones compiled with the old flags.
 $(BUILD)/%.o: src/%.c Makefile
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(INC) -MMD -MP -c $< -o $@
