@@ -112,6 +112,39 @@ bench-neon: | $(BUILD)
 	  src/core.c src/const.c src/prefix.c backends/compress_neon.c $(SODLIB) -o $(BUILD)/ub_bench_neon$(EXE)
 	$(BUILD)/ub_bench_neon$(EXE)
 
+# AVX2 kernel. Needs -mavx2 and an x86-64 host with AVX2, so it is separate
+# from check-backends, which runs what the host can execute. `make probe`
+# reports whether this CPU has AVX2.
+AVX2FLAGS = -mavx2
+
+# Fail with the reason rather than a bare compiler error.
+avx2-check:
+	@case "$$(uname -m)" in \
+	  x86_64|amd64) ;; \
+	  *) echo "AVX2 targets need an x86-64 host; this is $$(uname -m)."; \
+	     echo "  cross-compile: make check-avx2 CC=x86_64-w64-mingw32-gcc EXE=.exe"; \
+	     exit 1 ;; \
+	esac
+
+check-avx2: avx2-check sodium-check | $(BUILD)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(AVX2FLAGS) $(INC) $(SODINC) tests/test_core.c \
+	  src/core.c src/const.c src/prefix.c backends/compress_avx2.c \
+	  $(SODLIB) -o $(BUILD)/ub_avx2c$(EXE) && $(BUILD)/ub_avx2c$(EXE)
+	$(CC) $(CFLAGS) $(AVX2FLAGS) $(INC) $(SODINC) tests/test_prefix.c \
+	  src/core.c src/const.c src/prefix.c backends/compress_avx2.c \
+	  $(SODLIB) -o $(BUILD)/ub_avx2p$(EXE) && $(BUILD)/ub_avx2p$(EXE)
+	$(CC) $(CFLAGS) $(AVX2FLAGS) $(INC) tests/test_kat.c \
+	  src/core.c src/const.c src/prefix.c backends/compress_avx2.c \
+	  -o $(BUILD)/ub_avx2k$(EXE) && $(BUILD)/ub_avx2k$(EXE)
+
+bench-avx2: avx2-check sodium-check | $(BUILD)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(AVX2FLAGS) $(INC) $(SODINC) bench/bench_prefix.c \
+	  src/core.c src/const.c src/prefix.c backends/compress_avx2.c \
+	  $(SODLIB) -o $(BUILD)/ub_bench_avx2$(EXE)
+	$(BUILD)/ub_bench_avx2$(EXE)
+
 bench-threads: | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) $(SODINC) -DUB_HASH_N_SERIAL -DUB_THREADS=$(THREADS) \
 	  bench/bench_prefix.c $(SRC) backends/hash_n_threads.c $(SODLIB) -lpthread -o $(BUILD)/ub_bench_thr$(EXE)
@@ -208,5 +241,5 @@ check-sanitize: sodium-check | $(BUILD)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(BUILD)/ub_san_pre$(EXE)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(BUILD)/ub_san_api$(EXE)
 
-.PHONY: bench-neon bench-threads check-backends check-negative check-portable
+.PHONY: bench-neon bench-avx2 check-avx2 avx2-check bench-threads check-backends check-negative check-portable
 .PHONY: check-wipe-modes check-sanitize

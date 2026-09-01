@@ -97,6 +97,8 @@ make check-backends SODIUM=<prefix>         # each alternative kernel, full orac
 make check-sanitize SODIUM=<prefix>         # ASan + UBSan; leak checks are Linux-only
 make bench SODIUM=<prefix>                  # ns/digest for this machine
 make bench-neon SODIUM=<prefix>             # same, with the NEON kernel (aarch64)
+make check-avx2 SODIUM=<prefix>             # AVX2 kernel conformance (x86-64)
+make bench-avx2 SODIUM=<prefix>             # same, measured
 make bench-threads THREADS=<n> SODIUM=<..>  # same, with the range split across threads
 make probe                                  # CPU identity; report it with any figure
 ```
@@ -318,7 +320,7 @@ See [docs/GUIDE.md](docs/GUIDE.md#adapters).
 include/uniblake/   public headers
 src/                implementation
 compat/             adapter headers (compat/ref: derived oracle)
-backends/           alternative NEON and threaded kernels
+backends/           alternative kernels (backends/vendor: donor macros)
 tests/  bench/      conformance, measurement (tests/vendor: published vectors)
 probe/              CPU identity and ISA flags (make probe)
 docs/
@@ -350,11 +352,11 @@ statement, with ours added alongside it -- never replacing it.
 upstream name, layout and comments, with a note giving the upstream link and
 the commit taken. Untouched: a local edit makes it derived.
 
-Two derived components are present, each keeping the upstream copyright
-alone: `compat/ref/`, the BLAKE2 author reference with its identifiers
-mechanically renamed, and `tests/vendor/`, the authors' published test vectors
-re-expressed as C arrays. `backends/vendor/` is empty, held open for kernel
-donors.
+Present now: `backends/vendor/libsodium/`, x86 SIMD compress macros copied
+unmodified, is vendored. `compat/ref/` (the BLAKE2 author reference with
+identifiers renamed) and `tests/vendor/` (the authors' published vectors
+re-expressed as C arrays) are derived. All three keep the upstream copyright
+alone.
 
 ## Licensing
 
@@ -383,6 +385,25 @@ the authorities.
 | suites | 6, plus a negative suite that must fail |
 | build dependencies | none |
 | test dependencies | libsodium, for four of the six suites |
+
+### Memory
+
+The library allocates nothing. A caller needs one state plus its own buffers.
+
+| | |
+|---|--:|
+| `ub_state` | 232 bytes, 8-byte aligned; query with `ub_state_size()` |
+| static constants | 256 bytes |
+| compiled code | 8 KB |
+| each conformance suite, peak RSS | 2 MB |
+| `make bench`, peak RSS | 26 MB |
+
+Measured on Apple M4 Pro, macOS 26.3, arm64, Apple clang 21, dynamically
+linked. An empty C program is 1 MB of that 2 MB, so the suites cost little
+beyond process overhead; a static build on another platform will differ. The
+benchmark figure is one 25 MB output buffer, 400,000 digests at a 64-byte
+stride, and scales with `N` in `bench/bench_prefix.c`; it also links libsodium
+for comparison. Reproduce with `/usr/bin/time -l`.
 
 The negative suite links a compression function with one round removed and
 requires every oracle comparison to reject it: a suite that cannot fail proves

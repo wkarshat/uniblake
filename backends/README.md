@@ -5,15 +5,31 @@ checked with the same suites as the shipped code.
 
 | file | replaces | build |
 |---|---|---|
-| `compress_neon.c` | `ub_compress` | drop `src/compress.c`, add this |
+| `compress_neon.c` | `ub_compress` | drop `src/compress.c`, add this (aarch64) |
+| `compress_avx2.c` | `ub_compress` | same, plus `-mavx2` (x86-64 with AVX2) |
 | `hash_n_threads.c` | `ub_hash_n` | `-DUB_HASH_N_SERIAL -DUB_THREADS=N`, add this, `-lpthread` |
 
-Both pass the full oracle suite; `make check-backends` runs them.
+`make check-backends` runs the kernels this host can execute. The AVX2 kernel
+needs an x86-64 host: `make check-avx2` and `make bench-avx2` there, or
+cross-compile with `CC=x86_64-w64-mingw32-gcc EXE=.exe` and run the binaries
+on the target. `make probe` reports whether a CPU has AVX2.
+
+Unmeasured: no AVX2 result is recorded because no x86-64 machine has been in
+the loop. The kernel compiles warning-free under `-Wpedantic` and emits 340
+AVX2 instructions across 16 `ymm` registers with no spilling, but compiling is
+not measuring.
 
 ## Measurements
 
 Apple M4 Pro (arm64, 14 cores), Apple clang -O2, libsodium 1.0.21.
 Prefix 140 B, digest 50 B, median of 7 reps x 400k digests.
+
+A row compares builds on **this** part, at this core count, cache and memory
+configuration, on this working-set size. It is not a comparison between
+instruction sets: NEON here is one implementation on one Apple core, and says
+nothing about AVX2 on an x86-64 part of some other generation. The concurrent
+rows likewise measure this chip's cores and memory system, not threading in
+general.
 
 | build | streaming | `ub_hash_n` |
 |---|--:|--:|
