@@ -6,7 +6,6 @@ AR      ?= ar
 CFLAGS  ?= -O2 -std=c11 -Wall -Wextra
 INC      = -Iinclude -Isrc
 SRC      = src/core.c src/compress.c src/const.c src/prefix.c
-OBJ      = $(SRC:.c=.o)
 
 # libsodium is the conformance oracle for check/bench; the library links none.
 # Point at whichever build you want to be checked against -- ideally the one
@@ -22,6 +21,13 @@ SODIUM  ?= /usr/local
 # EXE is the executable suffix: empty everywhere except native Windows.
 BUILD   ?= build
 EXE     ?=
+
+# Objects and the archive live under BUILD too, not beside the sources, so a
+# native build and a cross build can share one checkout without overwriting
+# each other or silently reusing the other's objects. Give each its own BUILD.
+OBJ      = $(SRC:src/%.c=$(BUILD)/%.o)
+LIB      = $(BUILD)/libuniblake.a
+
 SODINC   = -I$(SODIUM)/include
 SODLIB   = -L$(SODIUM)/lib -lsodium
 
@@ -45,12 +51,13 @@ sodium-check:
 $(BUILD):
 	@mkdir -p $(BUILD)
 
-all: libuniblake.a
+all: $(LIB)
 
-libuniblake.a: $(OBJ)
+$(LIB): $(OBJ)
 	$(AR) rcs $@ $(OBJ)
 
-%.o: %.c
+$(BUILD)/%.o: src/%.c
+	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(INC) -c $< -o $@
 
 # The BLAKE2 author-reference alias shim, checked against the vendored
@@ -72,7 +79,7 @@ bench: sodium-check | $(BUILD)
 	$(BUILD)/ub_bench$(EXE)
 
 clean:
-	rm -f $(OBJ) libuniblake.a
+	rm -f src/*.o libuniblake.a
 	rm -rf $(BUILD)
 
 .PHONY: all check bench clean sodium-check check-alias

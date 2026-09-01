@@ -176,30 +176,62 @@ because it links nothing; the suites need a libsodium built for the same
 target, so without one, cross-check what does not need it and run the rest
 natively.
 
+Give the cross build its own `BUILD` so it sits alongside the native one
+rather than replacing it -- see "Two toolchains, one checkout" below.
+
 ```
 sudo apt install gcc-mingw-w64-x86-64
-make CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar
-make check-alias CC=x86_64-w64-mingw32-gcc EXE=.exe   # needs Wine to run
+
+WIN="BUILD=build-win CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar EXE=.exe"
+make $WIN                  # build-win/libuniblake.a, a Windows archive
+make check-alias $WIN      # needs Wine, or copy build-win/ to the target
 ```
 
 Cross-*compiling* proves the code reaches the target; it does not prove the
-digests are right there. Only running the suites on the target does that.
+digests are right there. Only running the suites on the target does that --
+either under Wine, or by copying `build-win/` to the Windows machine.
 
 The MSYS2 and cross-compile commands above are the shape of the work, not a
 transcript -- they have not been exercised here, on a machine with no MinGW
 toolchain. Everything else in this section has been run.
 
-#### Variables
+#### Two toolchains, one checkout
 
-Test and bench binaries go to `build/` in the tree, gitignored and removed by
-`make clean`.
+Everything a build produces -- objects, the archive, test binaries -- goes
+under `BUILD`. Nothing is written beside the sources, so a native build and a
+cross build coexist in one clone; give each its own `BUILD` and they never
+touch. One repository, one checkout, two output trees:
+
+```
+make                                          # -> build/
+make check SODIUM=/usr                        # native suites
+
+make BUILD=build-win CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar EXE=.exe
+```
+
+Pass the variables on each command line rather than collecting them in a shell
+variable; `make` needs them as its own arguments.
+
+Neither rebuilds nor invalidates the other, and `make` will not reuse the
+wrong toolchain's objects. `make clean` removes only the tree named by
+`BUILD`, so clean each separately:
+
+```
+make clean                       # removes build/
+make clean BUILD=build-win       # removes build-win/
+```
+
+`build/` and `build-*/` are gitignored. Use a second clone only if you want
+different *sources* -- for the same sources, a second `BUILD` is enough.
+
+#### Variables
 
 | variable | default | set it when |
 |---|---|---|
 | `SODIUM` | `/usr/local` | libsodium is elsewhere |
 | `EXE` | empty | executables need a suffix (native Windows) |
 | `CC`, `AR` | `cc`, `ar` | cross-compiling, or selecting a second compiler |
-| `BUILD` | `build` | the output should go somewhere else |
+| `BUILD` | `build` | building with a second toolchain from one checkout |
 
 The Makefile recipes are POSIX shell -- no bash extensions -- so they run
 under whatever `/bin/sh` a platform provides, including `dash` and MSYS2.
