@@ -21,6 +21,37 @@
  *
  * The reference also carries a `last_node` flag used only when hashing a
  * tree; this library hashes sequentially, so it is omitted. */
+/* LAYOUT WARNING -- read before changing any field below.
+ *
+ * Every field here is a fixed-width type on purpose. That is what makes
+ * sizeof(struct ub_state) identical on every target tested: 232 bytes,
+ * 8-byte aligned, on Linux x86-64, Windows x64 (PE32+) and Windows 32-bit
+ * (PE32) alike, where the pointer width differs but nothing in this struct
+ * scales with it.
+ *
+ * Introducing a field whose size or alignment is ABI-dependent -- size_t,
+ * a pointer, long, or a struct containing one -- breaks that. The state was
+ * 240 bytes at the initial commit, when buflen and outlen were size_t, and
+ * that build was correct: 240 worked, and nothing here says a differing size
+ * is a defect. What it was not is *equal across targets*: the same source
+ * gave 240 on LP64 and 232 on ILP32. Narrowing them to uint8_t (commit
+ * 76b232f) both saved eight bytes and made the size ABI-invariant.
+ *
+ * The consequences of losing that equality are not fully mapped, which is the
+ * reason for this warning rather than a rule. Callers are supposed to size
+ * their storage with ub_state_size() at runtime and never embed a literal, so
+ * a per-target size is legal by the documented contract. But it silently
+ * makes a state allocated by one build the wrong size for another -- across a
+ * cross-compile boundary, a serialized state, a shared-memory region, or a
+ * prebuilt binary paired with differently built callers -- and the failure is
+ * a memory error, not a diagnostic. UB_WIPE already moves this layout (see
+ * the note on the keyed field); a field-type change moves it per target as
+ * well.
+ *
+ * So: changing these fields is allowed and may well be right. If you do,
+ * re-measure ub_state_size() on a 64-bit and a 32-bit target -- `make
+ * check-portable` does not catch this, and neither does any current test --
+ * and say in the commit message whether the sizes still agree. */
 struct ub_state {
   uint64_t h[8];                 /* chaining value */
   uint64_t t[2];                 /* message byte counter */

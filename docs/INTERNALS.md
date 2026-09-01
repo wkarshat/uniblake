@@ -347,6 +347,20 @@ handler is replaced — `fprintf`/`stderr`.
 `ub_state_size()` and `ub_state_align()` are reported at runtime and are not
 part of the ABI. Do not embed a literal.
 
+Measured, the size is the same everywhere tested -- 232 bytes, 8-byte aligned,
+on Linux x86-64, Windows x64 and Windows 32-bit -- because every field of
+`struct ub_state` is a fixed-width type and none scales with pointer width.
+That equality is a property of the current field types, not a guarantee of the
+contract. Adding a `size_t`, a pointer, or a `long` would make the size differ
+per target, as it did before commit `76b232f`, when `buflen` and `outlen` were
+`size_t` and the state was 240 bytes on LP64 against 232 on ILP32. That build
+was correct -- 240 worked -- but the same source no longer gave the same size
+on every target, which quietly breaks any state shared across a cross-compile
+boundary, a serialization, or a prebuilt binary paired with differently built
+callers. No test catches it; `make check-portable` compiles, it does not
+compare sizes. The maintainer note lives at the struct definition in
+`src/internal.h`.
+
 `make check-sanitize` runs the oracle suites under AddressSanitizer and
 UndefinedBehaviorSanitizer together, at `-O1 -g`. Not part of `make check`:
 it is a separate build and roughly twice as slow, so it is run deliberately

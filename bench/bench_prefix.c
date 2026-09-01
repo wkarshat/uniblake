@@ -1,4 +1,5 @@
 /* Copyright (c) 2026 UniBlake Developers */
+#define _POSIX_C_SOURCE 200112L  /* clock_gettime + posix_memalign under strict -std=c99/c11 */
 /* Streaming vs prefix state, on the geometry where they differ.
  * Median ns/digest. Correctness is the tests' job, not this file's. */
 #include "uniblake/prefix.h"
