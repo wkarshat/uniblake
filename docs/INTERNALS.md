@@ -419,6 +419,45 @@ The two Windows rows link `tests/test_api.c` and `compat/test_blake2_alias.c`,
 which need no oracle; the remaining suites need a libsodium built for the same
 target.
 
+### Running another architecture's kernel
+
+Correctness of a SIMD kernel can be established without the target hardware;
+speed cannot.
+
+On Apple silicon, `clang -arch x86_64` plus Rosetta 2 runs an x86-64 binary
+directly. Rosetta does not advertise AVX2 in CPUID -- a `cpuid` leaf-7 probe
+reports `AVX2=0` -- but it executes AVX2 instructions correctly, so a kernel
+built with `-mavx2` runs and can be checked against the suites that need no
+oracle:
+
+```sh
+clang -arch x86_64 -mavx2 -O2 -std=c11 -Iinclude -Isrc -Itests \
+  tests/test_kat.c src/core.c src/const.c src/prefix.c \
+  backends/compress_avx2.c -o /tmp/kat_avx2 && /tmp/kat_avx2
+```
+
+The oracle suites additionally need a libsodium built for the same
+architecture; a Homebrew arm64 build will not link.
+
+Wine is the equivalent for a MinGW cross-build, and on Apple silicon it is
+worth nothing here: a PE binary needs Wine *and* x86-64 translation, and the
+`-arch x86_64` route above already gives the second without the first. Wine
+earns its place on an x86-64 Linux host, where it runs the Windows binaries
+that `make check-avx2 CC=x86_64-w64-mingw32-gcc EXE=.exe` produces.
+
+**Cost.** Translation is cheap enough that this is a routine check, not a
+last resort. On an M4 Pro the vector suite runs in 0.43 s the first time a
+binary is seen -- Rosetta translating and caching it -- and in hundredths of a
+second on every later run. Per-digest throughput is roughly 14x native
+(~2,400 ns against ~174 ns), so even the 45,000-check prefix suite would be
+seconds, not minutes, if an x86-64 oracle were available to link against.
+
+**What it does not give.** Neither route measures. Translation rewrites the
+instruction stream, so a timing from it says nothing about the target. And
+the oracle suites need a libsodium built for the same architecture: a Homebrew
+arm64 build will not link, which leaves the published vectors and the vendored
+reference as the independent checks available under translation.
+
 ### The platform matrix
 
 Four machines are available: this Apple Silicon Mac, Ubuntu 18.04, Ubuntu
