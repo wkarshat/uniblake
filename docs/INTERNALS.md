@@ -224,22 +224,38 @@ from.
 | change | result |
 |---|---|
 | `#pragma clang loop unroll(full)` on the 12-round loop | **27% slower** (98 -> 114 ns; stack traffic 0 -> 398) |
+| hand-unrolling with literal sigma indices | **11% faster** (89 -> 79 ns) -- adopted, see below |
 | the same plus `__builtin_assume_aligned` on the block | 27% slower |
 | hoisting the message-schedule row out of the round | no change |
 | finalizing without copying the whole state | ~1%, inside noise |
 | column-major working vector | no change (95.2-96.7 ns either way) |
 
-Unrolling loses to **register pressure**, not code size. Sixteen working
-words plus sixteen message words already exceed the 31 general-purpose
-registers: the rolled loop keeps one round live and spills nothing, while the
-unrolled body presents twelve rounds at once and spills. Same reason `-O3`
-measures slower than `-O2` here. Because the rolled loop spills nothing,
-layout changes aimed at the register allocator have nothing to recover --
-which is why the column-major experiment measured flat.
+The two unrolling results look contradictory and are not. `#pragma unroll`
+replicates the loop body but leaves `ub_sigma[r][2*i]` as a runtime lookup: the
+array is `extern`, so the compiler cannot fold the index even once `r` is
+known. The result is twelve copies of the same address arithmetic, more
+register pressure and no saving.
 
-The lesson for a replacement: gains come from doing fewer or wider operations,
-not from unrolling or from alignment hints. That means SIMD across independent
-messages, or threads, not a differently-shaped scalar loop.
+Hand-unrolling substitutes the sigma values as literals at each of the 96
+call sites, so the message word is addressed directly. Measured on an Apple
+M4 Pro:
+
+| | rolled | hand-unrolled |
+|---|--:|--:|
+| ns/digest | 89 | **79** |
+| `ldrb` (sigma loads) | 9 | **0** |
+| spills per rotate | 0.62 | **0.29** |
+| `__TEXT` | 996 B | 6,240 B |
+
+The byte-load count is the mechanism: the lookups disappear entirely.
+Spilling *falls* rather than rises, because the freed address registers are
+worth more than the extra live values cost. Code size grows 6x but remains 3%
+of this core's 192 KB L1i.
+
+The earlier conclusion -- that unrolling loses to register pressure, and that
+gains must come from wider operations -- was drawn from the `#pragma` result
+alone and did not hold. It is kept above as a measured fact about that
+specific change.
 
 ### Secret material after finalization
 
