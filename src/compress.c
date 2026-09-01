@@ -39,7 +39,7 @@
  * semantics -- see ub_compress_final. */
 /* One block, counter and flags already set by the caller. Both entry points
  * below build on this, so the round code exists once. */
-static void compress_block(struct ub_state *S, const uint8_t *block) {
+static void compress_block(struct ub_state *S, const uint8_t *block, uint64_t last) {
   {
     uint64_t m[16], v[16];
     for (int i = 0; i < 16; ++i) m[i] = ub_load64(block + i * 8);
@@ -47,8 +47,9 @@ static void compress_block(struct ub_state *S, const uint8_t *block) {
     v[ 8] = ub_iv[0]; v[ 9] = ub_iv[1]; v[10] = ub_iv[2]; v[11] = ub_iv[3];
     v[12] = ub_iv[4] ^ S->t[0];
     v[13] = ub_iv[5] ^ S->t[1];
-    v[14] = ub_iv[6] ^ S->f[0];
-    v[15] = ub_iv[7] ^ S->f[1];
+    v[14] = ub_iv[6] ^ last;
+    v[15] = ub_iv[7];   /* f[1] is the tree-hashing last-node flag; this
+                         * library hashes sequentially, so it is always 0. */
       GK( 0, 1, v[0],v[4],v[ 8],v[12]);
       GK( 2, 3, v[1],v[5],v[ 9],v[13]);
       GK( 4, 5, v[2],v[6],v[10],v[14]);
@@ -157,7 +158,7 @@ void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks)
 {
   for (size_t n = 0; n < nblocks; ++n) {
     S->t[0] += UB_BLOCKBYTES; S->t[1] += (S->t[0] < UB_BLOCKBYTES);
-    compress_block(S, blocks + n * UB_BLOCKBYTES);
+    compress_block(S, blocks + n * UB_BLOCKBYTES, 0);
   }
 }
 
@@ -165,7 +166,7 @@ void ub_compress(struct ub_state *S, const uint8_t *blocks, size_t nblocks)
 /* Finalization: the counter and flags are the caller's, so this compresses
  * directly instead of decrementing t, calling ub_compress, and restoring it. */
 void ub_compress_final(struct ub_state *S, const uint8_t *block) {
-  compress_block(S, block);
+  compress_block(S, block, (uint64_t)-1);
 }
 
 #ifdef UB_KERNEL_RUNTIME

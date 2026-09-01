@@ -7,7 +7,7 @@ int ub_prefix_check(const ub_state *S, size_t tailmax) {
   if (!S) return ub_err(UB_E_ARG, __func__, "NULL state");
   /* The point of this call is to predict what the hashing calls will do, so
    * it has to reject everything they reject -- including a finalized state. */
-  if (S->f[0] != 0) return ub_err(UB_E_STATE, __func__, "state already finalized");
+  if (S->fin != 0) return ub_err(UB_E_STATE, __func__, "state already finalized");
   if (tailmax > UB_BLOCKBYTES)
     return ub_err(UB_E_GEOMETRY, __func__, "tailmax exceeds one block");
   /* update() is eager, so at most one block is pending. A digest costs one
@@ -34,7 +34,7 @@ static int finish(const struct ub_state *S, const uint8_t *tail, size_t taillen,
   /* Subtract, do not add: buflen + taillen wraps for a huge taillen and the
    * memcpy below would then run off the state. */
   if (taillen > (size_t)(UB_BLOCKBYTES - S->buflen)) return UB_E_GEOMETRY;
-  if (S->f[0] != 0) return UB_E_STATE;
+  if (S->fin != 0) return UB_E_STATE;
   struct ub_state t = *S;
   memcpy(t.buf + t.buflen, tail, taillen);
   t.buflen += taillen;
@@ -48,7 +48,7 @@ int ub_hash_tail(const ub_state *S, const void *tail, size_t taillen,
     return ub_err(UB_E_ARG, __func__, "NULL tail with nonzero taillen");
   /* One digest per call, so the conditions finish() rechecks are reported
    * here -- see the note on finish() above. */
-  if (S->f[0] != 0) return ub_err(UB_E_STATE, __func__, "state already finalized");
+  if (S->fin != 0) return ub_err(UB_E_STATE, __func__, "state already finalized");
   if (outcap < S->outlen)
     return ub_err(UB_E_OUTCAP, __func__, "output buffer smaller than the digest");
   if (taillen > (size_t)(UB_BLOCKBYTES - S->buflen))
@@ -85,7 +85,7 @@ int ub_hash_n(const ub_state *S, size_t tailwidth, uint64_t first, size_t n,
     return ub_err(UB_E_ARG, __func__, "slice outside the digest");
   if (stride < len)
     return ub_err(UB_E_OUTCAP, __func__, "stride below bytes written");
-  if (S->f[0] != 0)
+  if (S->fin != 0)
     return ub_err(UB_E_STATE, __func__, "state already finalized");
   /* Geometry is a property of the state, so validate once, not per digest. */
   if (tailwidth > (size_t)(UB_BLOCKBYTES - S->buflen))
