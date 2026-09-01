@@ -458,8 +458,9 @@ runs anywhere and is a useful first signal on a bare target.
 
 # Measurements and conformance
 
-Apple M4 Pro (arm64, 14 cores), Apple clang, -O2, libsodium 1.0.21.
-Median of 7 reps x 400k digests. Reproduce with `make bench`.
+Apple M4 Pro (arm64, 14 cores), Apple clang, -O2. Median of 7 reps x 400k
+digests. Reproduce with `make bench`; the oracle version is printed by the run
+and matters (see below).
 
 Figures from one machine and one compiler. Run the benchmarks on the target
 rather than carrying these forward.
@@ -471,11 +472,17 @@ bytes pending and room for a 4-byte tail in the final block.
 
 | build | streaming | batch (`ub_hash_n`) |
 |---|--:|--:|
-| libsodium | 285.0 ns | — |
+| libsodium 1.0.21 | 285.0 ns | — |
+| libsodium 1.0.22 | 185.9 ns | — |
 | uniblake scalar | 92.9 ns | 96.4 ns |
 | uniblake NEON | 138.6 ns | 141.4 ns |
 | uniblake, 4 threads | 93.4 ns | 26.2 ns |
 | uniblake, 8 threads | 93.2 ns | 13.4 ns |
+
+The oracle's own version moves the comparison: 1.0.22 is a third faster than
+1.0.21 on this machine, so the same uniblake build reads as 2.0x rather than
+3.1x against it. Record which libsodium a figure was taken against, and
+compare only against the version the consumer actually links.
 
 The gain over libsodium is in `ub_update`, which compresses a full pending
 block as soon as more input follows: a state absorbed over a 140-byte prefix

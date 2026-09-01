@@ -65,66 +65,85 @@ ub_hash_n(S, 4, 0, count, 0, 0, out, 32);
 The values that vary between uses are the digest length, the personalization
 string, the shared header, and the counter width. The rest are defaults.
 
-## Build
+## Build and test
 
-```
-make            # libuniblake.a
-make check      # conformance suites
-make bench      # measurements
-```
+Pick your platform, run the two commands, and see the "what a pass looks like"
+block at the end of this section.
 
-The library needs a C99 compiler and nothing else. `make check` and `make
-bench` additionally need libsodium, used as an independent reference; point at
-a non-default install with `SODIUM=<prefix>` — ideally the build the consuming
-project already uses, so conformance is measured against the implementation
-being replaced. `make check-alias` needs no libsodium at all.
-
-Test and bench binaries are written to `build/` in the tree, which is
-gitignored and removed by `make clean`. Four variables cover the rest:
-
-| variable | default | set it when |
+| platform | build | test |
 |---|---|---|
-| `SODIUM` | `/usr/local` | libsodium is elsewhere |
-| `EXE` | empty | executables need a suffix (native Windows) |
-| `CC`, `AR` | `cc`, `ar` | cross-compiling, or selecting a second compiler |
-| `BUILD` | `build` | the output should go somewhere else |
+| macOS | `make` | `make check SODIUM=$(brew --prefix libsodium)` |
+| Ubuntu 24.04 | `make` | `make check SODIUM=/usr` |
+| Ubuntu 18.04 | `make` | `make check SODIUM=/usr` |
+| Windows 11 + WSL | `make` | `make check SODIUM=/usr` |
+| Windows 11 native | `make CC=gcc EXE=.exe` | `make check CC=gcc EXE=.exe SODIUM=/mingw64` |
 
-The Makefile recipes are POSIX shell — no bash extensions — so they run under
-whatever `/bin/sh` a platform provides, including `dash` and MSYS2. Nothing
-needs bash to be installed.
+`SODIUM` points at libsodium, which `make check` and `make bench` use as an
+independent reference. The library itself links nothing and needs only a C99
+compiler. Prefer the libsodium the consuming project already uses, so
+conformance is measured against the implementation being replaced.
 
-### Per platform
-
-**Linux.** Install libsodium headers (`libsodium-dev` on Debian and Ubuntu,
-`libsodium-devel` on Fedora), then:
+The rest of the validation, same on every platform:
 
 ```
-make && make check SODIUM=/usr
+make check-portable CC2=<second compiler>   # C99 and C11, warnings are failures
+make check-wipe-modes SODIUM=<prefix>       # secret-wiping compiled in and out
+make check-negative SODIUM=<prefix>         # proves the suites can fail
+make check-sanitize SODIUM=<prefix>         # ASan + UBSan (Linux and macOS)
+make bench SODIUM=<prefix>                  # ns/digest for this machine
 ```
 
-`/usr` is where a distribution package lands; a source build defaults to
-`/usr/local`.
+### Setup and details, per platform
 
-**Windows via WSL.** Identical to Linux — WSL is Linux. The one thing to get
-right is where the checkout lives: keep it on the WSL filesystem
-(`~/uniblake`), not under `/mnt/c`. Building across the Windows filesystem
-boundary is slow enough to be worth avoiding, and file-mode handling there
-differs.
+#### macOS
+
+```
+brew install libsodium gcc
+make
+make check SODIUM=$(brew --prefix libsodium)
+make check-portable CC2=gcc-16
+```
+
+Apple's `gcc` is a clang shim, so pass a real one to `CC2` or the second
+column tests nothing new.
+
+#### Ubuntu 24.04 and 18.04
+
+```
+sudo apt install build-essential libsodium-dev clang
+make
+make check SODIUM=/usr
+make check-portable CC2=clang
+make check-sanitize SODIUM=/usr
+```
+
+`/usr` is where the distribution package lands; a source build defaults to
+`/usr/local`. On 18.04 the system GCC is older, which is the point of testing
+there: it catches reliance on newer compiler behaviour.
+
+#### Windows 11 with WSL
+
+WSL is Linux, so the Ubuntu commands apply unchanged. Keep the checkout on the
+WSL filesystem (`~/uniblake`), not under `/mnt/c` -- the cross-boundary build
+is slow and file-mode handling differs.
 
 ```
 sudo apt install build-essential libsodium-dev
-make && make check SODIUM=/usr
+make
+make check SODIUM=/usr
 ```
 
-From PowerShell without leaving it, `wsl -e` runs the same commands:
+To stay in PowerShell, prefix with `wsl -e`:
 
 ```powershell
+wsl -e make
 wsl -e make check SODIUM=/usr
 ```
 
-**Windows 11, native.** The Makefile needs a POSIX shell and `ar`, which
-PowerShell and `cmd` do not provide. Install MSYS2 and drive it from
-PowerShell, which keeps one terminal for everything:
+#### Windows 11 native
+
+The Makefile needs a POSIX shell and `ar`, which PowerShell and `cmd` do not
+provide. Install MSYS2 and drive it from PowerShell, keeping one terminal:
 
 ```powershell
 winget install MSYS2.MSYS2
@@ -137,16 +156,25 @@ $msys = "C:\msys64\usr\bin\bash.exe"
 `-lc` runs a login shell so the MinGW toolchain is on `PATH`. `EXE=.exe` is
 the only Windows-specific setting; `build/` works unchanged.
 
+Or from an MSYS2 MinGW64 shell directly, without the wrapper:
+
+```
+make CC=gcc EXE=.exe
+make check CC=gcc EXE=.exe SODIUM=/mingw64
+```
+
 MSVC cannot build this Makefile, so an MSVC check means compiling `src/*.c`
 into your own project or a direct `cl` invocation. The sources are MSVC-clean:
 the one compiler-specific construct is guarded. Worth doing where MSVC is a
-target — it and MinGW disagree often enough that passing one says little about
-the other.
+target -- it and MinGW disagree often enough that passing one says little
+about the other.
 
-**Linux to Windows, cross-compiled.** Produces Windows binaries on a Linux
-host. The library cross-compiles cleanly because it links nothing; the test
-suites need a libsodium built for the same target, so without one, cross-check
-what does not need it and run the rest natively:
+#### Linux to Windows, cross-compiled
+
+Produces Windows binaries on a Linux host. The library cross-compiles cleanly
+because it links nothing; the suites need a libsodium built for the same
+target, so without one, cross-check what does not need it and run the rest
+natively.
 
 ```
 sudo apt install gcc-mingw-w64-x86-64
@@ -154,10 +182,41 @@ make CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar
 make check-alias CC=x86_64-w64-mingw32-gcc EXE=.exe   # needs Wine to run
 ```
 
-Cross-*compiling* proves the code is portable to the target; it does not prove
-the digests are right there. Only running the suites on the target does that.
-The commands above are the shape of the work, not a transcript: they have not
-been exercised on this machine, which has no MinGW toolchain installed.
+Cross-*compiling* proves the code reaches the target; it does not prove the
+digests are right there. Only running the suites on the target does that.
+
+The MSYS2 and cross-compile commands above are the shape of the work, not a
+transcript -- they have not been exercised here, on a machine with no MinGW
+toolchain. Everything else in this section has been run.
+
+#### Variables
+
+Test and bench binaries go to `build/` in the tree, gitignored and removed by
+`make clean`.
+
+| variable | default | set it when |
+|---|---|---|
+| `SODIUM` | `/usr/local` | libsodium is elsewhere |
+| `EXE` | empty | executables need a suffix (native Windows) |
+| `CC`, `AR` | `cc`, `ar` | cross-compiling, or selecting a second compiler |
+| `BUILD` | `build` | the output should go somewhere else |
+
+The Makefile recipes are POSIX shell -- no bash extensions -- so they run
+under whatever `/bin/sh` a platform provides, including `dash` and MSYS2.
+Nothing needs bash installed.
+
+#### What a pass looks like
+
+```
+blake2-alias: checks=1218 fails=0 -> PASS
+core: checks=630 fails=0 -> PASS
+prefix: checks=45531 fails=0 -> PASS
+api: checks=155 fails=0 -> PASS
+compat: checks=56 fails=0 -> PASS
+```
+
+Any `FAIL`, or a nonzero exit, means stop: a wrong digest is not a platform
+quirk. Report the machine, compiler and version with the failure.
 
 ## Documentation
 
