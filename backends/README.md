@@ -14,15 +14,7 @@ needs an x86-64 host: `make check-avx2` and `make bench-avx2` there, or
 cross-compile with `CC=x86_64-w64-mingw32-gcc EXE=.exe` and run the binaries
 on the target. `make probe` reports whether a CPU has AVX2.
 
-The AVX2 kernel is **correct but unmeasured**. On Apple silicon it runs under
-Rosetta 2, which executes AVX2 despite not advertising it in CPUID: the
-published vectors (1,536), the API suite (155) and the alias suite against the
-vendored BLAKE2 reference (1,218) all pass there. The oracle suites need a
-libsodium built for x86-64, which Homebrew's arm64 build is not.
-
-Rosetta is emulation, so it establishes correctness and nothing about speed.
-No AVX2 timing is recorded; `make bench-avx2` on real x86-64 is the only thing
-that would produce one.
+The AVX2 kernel passes the oracle suites on x86-64 and is measured below.
 
 ## Measurements
 
@@ -44,6 +36,21 @@ general.
 | 8 threads | 93.2 ns | 13.4 ns |
 
 Figures from one machine; re-measure on the target.
+
+Intel Skylake, 2 cores, GCC 13 -O2, libsodium 1.0.18. Same geometry: prefix
+140 B, digest 50 B, median of 7 reps x 400k digests.
+
+| build | streaming | `ub_hash_n` |
+|---|--:|--:|
+| scalar (shipped) | 218.9 ns | 225.3 ns |
+| AVX2 | 136.9 ns | 147.5 ns |
+| 2 threads | 215.1 ns | 118.7 ns |
+
+AVX2 is 1.6x scalar. The threaded row moves only `ub_hash_n`: that call
+computes independent digests and splits across cores, while streaming is a
+single dependent chain and stays at scalar speed.
+
+Measured in a VM; re-measure on the target.
 
 ## The scalar kernel now sets a higher bar
 
