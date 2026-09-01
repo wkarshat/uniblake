@@ -48,8 +48,17 @@ have; `ub_hash_n` is the entry point where such an implementation belongs.
 read-only, and each thread copies it and writes its own slice of the output.
 No locks, no shared counters.
 
-4 threads: 3.7x. 8 threads: 7.2x. Close to linear, which is what an
-embarrassingly parallel range should give.
+Measured on the M4 Pro, prefix 140 B, digest 50 B:
+
+| threads | ns/digest | speedup |
+|--:|--:|--:|
+| 1 | 93.8 | 1.0x |
+| 2 | 49.5 | 1.9x |
+| 4 | 25.5 | 3.7x |
+| 8 | 13.0 | 7.2x |
+
+Close to linear, which is what an embarrassingly parallel range should give.
+Reproduce with `make bench-threads THREADS=<n>`.
 
 Two details in the implementation worth keeping in a production version:
 arguments are validated once, before any thread starts, so a bad call fails

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "ub_alloc.h"
 static double ns(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1e9+t.tv_nsec;}
 static int cmpd(const void*a,const void*b){double x=*(double*)a,y=*(double*)b;return(x>y)-(x<y);}
 #define N 400000
@@ -29,12 +30,12 @@ int main(void){
     t[r]=(ns()-t0)/N; }
   qsort(t,REPS,sizeof*t,cmpd); double sod=t[REPS/2];
 
-  ub_state *S=aligned_alloc(ub_state_align(),ub_state_size());
+  ub_state *S=ub_aligned_alloc(ub_state_align(),ub_state_size());
   ub_param P; ub_param_init(&P,OUT);
   ub_init_param(S,&P); ub_update(S,pre,PRE);
 
   /* uniblake streaming, same shape: shows the core's own compression speed */
-  ub_state *W=aligned_alloc(ub_state_align(),ub_state_size());
+  ub_state *W=ub_aligned_alloc(ub_state_align(),ub_state_size());
   for(int r=0;r<REPS;r++){ double t0=ns();
     for(uint32_t i=0;i<N;i++){ ub_copy(W,S);
       uint8_t c[4]={(uint8_t)i,(uint8_t)(i>>8),(uint8_t)(i>>16),(uint8_t)(i>>24)};
@@ -56,5 +57,6 @@ int main(void){
   printf("  uniblake streaming     %7.1f   %.2fx\n",ubs,sod/ubs);
   printf("  ub_hash_n, n=1        %7.1f   %.2fx\n",one,sod/one);
   printf("  ub_hash_n              %7.1f   %.2fx\n",many,sod/many);
+  ub_aligned_free(S); ub_aligned_free(W);
   (void)sink; return 0;
 }

@@ -3,7 +3,7 @@
 For callers. Recipes, the full interface, and adapters for existing APIs.
 
 Start with UniBlake.md for what the library is and why the
-prefix case needs a guarantee.
+prefix case needs a specified absorption rule.
 
 ---
 
@@ -120,7 +120,7 @@ sets `digest_length = len`, `fanout = 1`, `depth = 1`, everything else zero.
 ```c
 ub_param P;
 ub_param_init(&P, 48);
-memcpy(P.personal, tag, 16);     /* 16-byte domain separator */
+memcpy(P.personal, tag, 16);     /* personalization: 16 bytes, domain-separates */
 ub_init_param(S, &P);
 ```
 
@@ -145,10 +145,16 @@ ub_init_param(S, &P);
 
 ### Threading
 
-One `ub_state` must not be mutated from two threads. A prefix state used only
-through `ub_hash_tail` / `ub_hash_n` is never mutated, so sharing it
-read-only across threads is safe. To stream on multiple threads, give each
-its own state via `ub_copy`.
+Two rules:
+
+- One `ub_state` must not be mutated from two threads.
+- A prefix state used only through `ub_hash_tail` or `ub_hash_n` is never
+  mutated, so sharing it read-only across threads is safe. To stream on
+  several threads, give each its own state via `ub_copy`.
+
+The library itself spawns no threads. Parallelism attaches at `ub_hash_n`,
+which takes the whole digest range in one call so a caller's own scheduler can
+split it.
 
 ### Errors
 

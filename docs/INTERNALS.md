@@ -264,19 +264,19 @@ both ways.
 Clearing goes through `ub_wipe`, which calls `memset` through a `volatile`
 function pointer so the store cannot be eliminated as dead. That is the
 portable form: no `memset_s`, no OS-specific call, no inline assembly, so it
-survives compilers that reject GNU asm syntax. It is defence in depth rather
-than a guarantee -- the standard does not promise the bytes are unrecoverable
-from a register or a swapped page.
+compiles under toolchains that reject GNU asm syntax.
+
+Scope: this clears the named buffers. Copies the compiler placed in registers
+or spilled to the stack, and pages written to swap, are outside its reach.
 
 Verified zeroed at `-O2`, `-O3` and `-Os` on two compilers.
 
 ### Reading a performance number
 
-A figure without its machine is an anecdote. The same code changes rank
-between CPU generations, so any number carried from one box to another is a
-guess. State the exact CPU, compiler, flags and input shape with every
-measurement, and prefer re-running `make bench` on the target over trusting a
-recorded figure.
+A figure is meaningless without its machine. Code changes reorder between CPU
+generations, so a number transferred from one host to another is unsupported.
+State the exact CPU, compiler, flags and input shape with every measurement,
+and re-run `make bench` on the target rather than citing a recorded figure.
 
 Measure the shape the caller actually uses. A bulk-throughput loop and a
 short-message loop can rank implementations differently, and optimising
@@ -317,7 +317,8 @@ on a vectorised one.
 C99. `ub_state_align()` uses `_Alignof` where C11 is available and the
 `offsetof` probe otherwise; both report the same value, which is why the
 alignment is queried at runtime rather than compiled in. No POSIX, no
-allocation, no threads, no floating point.
+allocation, no threading runtime, no floating point -- concurrency attaches at
+`ub_hash_n` rather than inside the library.
 
 Endian-neutral by construction: all serialization is explicit byte-shifting,
 so the library runs unchanged on big-endian targets. Note what that claim
@@ -338,6 +339,13 @@ part of the ABI. Do not embed a literal.
 UndefinedBehaviorSanitizer together, at `-O1 -g`. Not part of `make check`:
 it is a separate build and roughly twice as slow, so it is run deliberately
 rather than on every change.
+
+**Run it on Linux, not only on macOS.** LeakSanitizer is Linux-only; on
+macOS/arm64 ASan reports memory errors but silently skips leaks, so a clean
+run there is weaker evidence than it looks. The target prints which case
+applies -- `leaks: checked` or `leaks: NOT CHECKED on this platform`. Leaks in
+the test harness were found exactly this way, by an Ubuntu run, after the same
+target had passed repeatedly on macOS.
 
 `make check-portable` compiles the library under both C99 and C11 with
 `-Wall -Wextra -Wpedantic` and requires zero warnings. Point `CC2` at a
@@ -389,8 +397,8 @@ this is what to run and what each step buys.
 
 On Windows run (1) and (2) twice, once under MSVC and once under MinGW.
 
-Cross-compiling from Linux to Windows is worth doing for step (1) -- it proves
-the code reaches the target -- but it does not substitute for (2). Only running
+Cross-compiling from Linux to Windows covers step (1): it establishes the
+source is portable to the target. It does not substitute for (2). Only running
 the suites on the target shows the digests are right there, and a
 cross-compiled binary needs Wine or the actual machine to run.
 
@@ -398,9 +406,19 @@ cross-compiled binary needs Wine or the actual machine to run.
 little-endian, so the endian-neutrality claim above stays an argument about
 the code rather than a test result. Closing it needs a cross-compiler
 (`gcc-powerpc-linux-gnu` on either Ubuntu unit) and, to actually execute
-rather than merely compile, QEMU. Compile-only is worth doing anyway -- it is
-one package and one `make` -- but note that it proves less than it appears to,
-and say so when reporting it.
+rather than merely compile, QEMU. Compile-only costs one package and one
+`make`, and establishes less than execution; report it as such.
+
+### Allocation in the harnesses
+
+The library never allocates. The test and bench harnesses do, and they need
+alignment, which is not portable: C11 `aligned_alloc` is absent from MinGW's
+UCRT, which supplies `_aligned_malloc` and requires `_aligned_free` to release
+it. `tests/ub_alloc.h` selects among `_aligned_malloc`, `aligned_alloc`, and
+`posix_memalign`, pairing each with its correct deallocator.
+
+Harness-only: nothing in `include/` or `src/` includes it. A consumer allocates
+however it likes, sized by `ub_state_size()` and aligned to `ub_state_align()`.
 
 ### Bringing up a new platform
 
@@ -510,7 +528,7 @@ layout, and often extracts more than one field per digest. Measured inside one
 such caller, libsodium costs 337 ns per call against the 285 ns here -- 18%
 more -- so expect the same margin on top of every row.
 
-The lesson is Amdahl's law, and it decides whether this work is worth doing.
+Amdahl's law bounds the result.
 Against a whole operation of 8.3 s, of which 5.7 s was hashing, replacing the
 hash alone predicts:
 

@@ -113,9 +113,9 @@ the state depends on every byte absorbed so far, so in `varying || fixed` the
 shared part cannot be precomputed. Only `fixed || varying` benefits, and the
 state must be rebuilt whenever `fixed` changes.
 
-**No thread safety inside a state.** One state, one thread. A prefix state
-used only for hashing is never modified, so it may be shared read-only; to
-stream on several threads, give each its own copy.
+**No threads inside the library.** The core spawns nothing, locks nothing, and
+links no threading runtime. That is a decision about *where* concurrency
+lives, not a claim that hashing is serial -- see "Concurrency" below.
 
 **No key in the parameter block.** BLAKE2b absorbs the key as a padded first
 block, not as initial-state material, so keying is a separate init call.
@@ -155,4 +155,49 @@ one-compression digests.
 
 Removing any of the three hashing calls forces a caller into a slower or more
 error-prone shape; adding a fourth would duplicate one of them.
+
+## Concurrency
+
+The work is embarrassingly parallel and the library still spawns no threads.
+Both halves of that are deliberate.
+
+**Why the digests parallelize.** Each digest over a shared prefix is
+independent: it reads the prefix state, appends its own tail, and finalizes.
+Nothing is carried between digests, so a range of them has no ordering
+constraint and needs no coordination -- no locks, no shared counter, no
+accumulator. A thread takes a span of the range, copies the read-only prefix
+state, and writes its own slice of the output. Measured on an 8-core machine,
+that is a 7.2x speedup at 8 threads.
+
+**Why the library does not do it for you.** A hash library that creates
+threads makes three decisions that are not its to make: how many threads,
+when to spawn them, and which runtime to link. Those belong to the program.
+
+- A caller that already runs one task per core does not want a second pool
+  underneath it -- that oversubscribes and usually runs slower than serial.
+- The right count depends on what else the process is doing, which the
+  library cannot see.
+- Linking pthreads, or OpenMP, or a platform pool, forces that dependency on
+  every consumer including the ones hashing a single short message.
+
+So the core stays free of it: no allocation, no POSIX, no threading runtime.
+That is what makes it usable on a bare target and inside a caller that has
+its own scheduler.
+
+**Where concurrency attaches instead.** `ub_hash_n` is the seam. It takes the
+whole range and the output layout in one call, which is exactly what a
+parallel implementation needs and what a loop over single digests cannot
+provide -- a loop hands out one digest at a time and spends more on
+coordination than it saves. Replacing that one function distributes the range;
+the streaming logic above it is untouched.
+
+Two rules the caller owns, and they are simple because the state is small:
+
+- One `ub_state` must not be mutated from two threads.
+- A prefix state used only through `ub_hash_tail` or `ub_hash_n` is never
+  mutated, so sharing it read-only is safe. To stream on several threads,
+  give each its own copy via `ub_copy`.
+
+`backends/hash_n_threads.c` is a working pthreads implementation of exactly
+this, kept as a prototype rather than shipped for the reasons above.
 

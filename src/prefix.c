@@ -22,11 +22,11 @@ int ub_prefix_check(const ub_state *S, size_t tailmax) {
 /* Hot path: copy the state, append the tail into the pending block, finalize.
  * One compression.
  *
- * Deliberately silent: ub_hash_n calls this once per digest, so reporting
- * here would emit one line per digest and break the "one report per call"
- * guarantee in uniblake.h. Both callers validate the same conditions up
- * front, where a batch reports them exactly once; these checks remain as the
- * last line of defence and return their code bare. */
+ * Silent by design: ub_hash_n calls this once per digest, so reporting here
+ * would emit one line per digest, violating the one-report-per-call rule
+ * stated in uniblake.h. Both callers validate the same conditions up front,
+ * where a batch reports once. These checks are retained for the case a caller
+ * reaches finish() by another path, and return their code bare. */
 static int finish(const struct ub_state *S, const uint8_t *tail, size_t taillen,
                   void *out, size_t outcap) {
   if (outcap < S->outlen) return UB_E_OUTCAP;

@@ -133,8 +133,8 @@ void ub_compress_final(struct ub_state *S, const uint8_t *block);
  * needs no memset_s, no OS-specific SecureZeroMemory, and no inline asm, so
  * it works on compilers that reject GCC asm syntax.
  *
- * Defence in depth, not a guarantee: the C standard does not promise the
- * bytes are unrecoverable from registers or a swapped page. */
+ * Clears the named buffer only. Register copies, stack spills, and swapped
+ * pages are out of scope. */
 static inline void ub_wipe(void *p, size_t n) {
   static void *(*const volatile memset_v)(void *, int, size_t) = &memset;
   memset_v(p, 0, n);

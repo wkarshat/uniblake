@@ -2,7 +2,7 @@
 
 BLAKE2b in portable C, for callers who need more than a one-shot hash:
 
-- **Eager absorption, guaranteed.** Whole blocks are compressed as soon as
+- **Eager absorption, specified.** Whole blocks are compressed as soon as
   more input follows, so a shared prefix is absorbed once. The standard API
   cannot express this and gives no diagnostic when an implementation does the
   opposite.
@@ -11,8 +11,13 @@ BLAKE2b in portable C, for callers who need more than a one-shot hash:
   and alignment. Every entry point validates and returns a code; diagnosis is
   opt-in and costs nothing when unused.
 - **Portable by construction.** C99, endian-neutral, no allocation, no POSIX,
-  no threads, no floating point. Conformance is checked against an independent
-  oracle, not asserted.
+  no threading runtime, no floating point. Conformance is checked against an
+  independent oracle, not asserted.
+- **Parallel where it pays, without owning your threads.** Digests over a
+  shared prefix are independent, and `ub_hash_n` hands a kernel the whole
+  range at once; splitting it across 8 threads measured 7.2x. The library
+  spawns nothing itself, so it does not fight a caller that already has a
+  scheduler.
 
 BLAKE2b only. Other algorithms are out of scope, not pending.
 
@@ -23,23 +28,21 @@ repeated case:
 
     H(header || 0),  H(header || 1),  H(header || 2),  ...
 
-Absorb `header` once, then produce each digest for the cost of a single
-compression. Doing this through a plain streaming API works only if the
-implementation compresses the shared bytes eagerly — which is not something
-the BLAKE2 API lets a caller ask about. uniblake guarantees it and will tell
-you when your sizes do not permit it.
+Absorb `header` once, then produce each digest for the cost of a single compression.
+This requires the implementation to compress the shared bytes eagerly, which the BLAKE2
+API neither specifies nor exposes. uniblake specifies it as interface behaviour, and
+reports when the sizes do not permit it.
 
 ## Quick start
 
 ```c
 #include "uniblake/uniblake.h"
 
-/* 32 = digest length in bytes. Anything from 1 to 64; 32 and 64 are the
-   conventional choices. */
+/* Digest length in bytes: 1 to 64. 32 and 64 are conventional. */
 ub_state *S = aligned_alloc(ub_state_align(), ub_state_size());
 ub_init(S, 32);
 ub_update(S, msg, msglen);
-ub_final(S, out, sizeof out);          /* out must hold 32 bytes */
+ub_final(S, out, sizeof out);          /* outcap; must be >= digest length */
 ```
 
 Repeated-prefix hashing:
@@ -48,22 +51,23 @@ Repeated-prefix hashing:
 #include "uniblake/prefix.h"
 
 ub_param P;
-ub_param_init(&P, 32);                 /* digest length, as above */
-memcpy(P.personal, "my-app-v1\0\0\0\0\0\0\0", 16);   /* optional 16-byte
-                                          domain separator; omit if unused */
+ub_param_init(&P, 32);                 /* digest length */
+/* Optional. BLAKE2 personalization: a 16-byte parameter-block field mixed into the
+   initial state, yielding an independent hash function per value. */
+memcpy(P.personal, "my-app-v1\0\0\0\0\0\0\0", 16);
 ub_init_param(S, &P);
-ub_update(S, header, headerlen);       /* the shared bytes, absorbed once */
+ub_update(S, header, headerlen);       /* shared bytes, absorbed once */
 
-/* count digests: H(header || 0), H(header || 1), ...
+/* Digests of header || counter, for counter in [0, count).
    4      = counter width in bytes (4 or 8)
    0      = first counter value
-   0, 0   = write the whole digest (see the guide for partial output)
-   stride = spacing between digests in out; 32 packs them back to back */
+   0, 0   = whole digest; a nonzero pair selects a slice (docs/GUIDE.md)
+   32     = output stride; equal to the digest length packs them contiguously */
 ub_hash_n(S, 4, 0, count, 0, 0, out, 32);
 ```
 
-The values that vary between uses are the digest length, the personalization
-string, the shared header, and the counter width. The rest are defaults.
+Four parameters vary between deployments: digest length, personalization, the shared
+header, and counter width. The remainder are sequential-mode defaults.
 
 ## Build and test
 
@@ -89,7 +93,7 @@ The rest of the validation, same on every platform:
 make check-portable CC2=<second compiler>   # C99 and C11, warnings are failures
 make check-wipe-modes SODIUM=<prefix>       # secret-wiping compiled in and out
 make check-negative SODIUM=<prefix>         # proves the suites can fail
-make check-sanitize SODIUM=<prefix>         # ASan + UBSan (Linux and macOS)
+make check-sanitize SODIUM=<prefix>         # ASan + UBSan; leak checks are Linux-only
 make bench SODIUM=<prefix>                  # ns/digest for this machine
 ```
 
@@ -165,35 +169,39 @@ make check CC=gcc EXE=.exe SODIUM=/mingw64
 
 MSVC cannot build this Makefile, so an MSVC check means compiling `src/*.c`
 into your own project or a direct `cl` invocation. The sources are MSVC-clean:
-the one compiler-specific construct is guarded. Worth doing where MSVC is a
-target -- it and MinGW disagree often enough that passing one says little
-about the other.
+the one compiler-specific construct is guarded. Run it where MSVC is a target:
+it and MinGW diverge often enough that one passing does not imply the other.
 
 #### Linux to Windows, cross-compiled
 
-Produces Windows binaries on a Linux host. The library cross-compiles cleanly
-because it links nothing; the suites need a libsodium built for the same
-target, so without one, cross-check what does not need it and run the rest
-natively.
-
-Give the cross build its own `BUILD` so it sits alongside the native one
-rather than replacing it -- see "Two toolchains, one checkout" below.
+Produces Windows PE binaries on a Linux or macOS host via MinGW-w64. The library
+links nothing, so it cross-compiles without a target sysroot. Give the cross build its
+own `BUILD` so it sits beside the native one; see "Two toolchains, one checkout".
 
 ```
-sudo apt install gcc-mingw-w64-x86-64
+sudo apt install gcc-mingw-w64-x86-64          # macOS: brew install mingw-w64
 
-WIN="BUILD=build-win CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar EXE=.exe"
-make $WIN                  # build-win/libuniblake.a, a Windows archive
-make check-alias $WIN      # needs Wine, or copy build-win/ to the target
+make BUILD=build-win CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar EXE=.exe
+make check-alias BUILD=build-win CC=x86_64-w64-mingw32-gcc EXE=.exe
 ```
 
-Cross-*compiling* proves the code reaches the target; it does not prove the
-digests are right there. Only running the suites on the target does that --
-either under Wine, or by copying `build-win/` to the Windows machine.
+Pass the variables as `make` arguments on each line; collecting them in a shell
+variable does not work.
 
-The MSYS2 and cross-compile commands above are the shape of the work, not a
-transcript -- they have not been exercised here, on a machine with no MinGW
-toolchain. Everything else in this section has been run.
+The first command yields `build-win/libuniblake.a` containing COFF x86-64 objects. The
+second builds `build-win/ub_alias.exe`, a PE32+ console executable. `check-alias` is the
+suite to cross-build because its oracle is vendored; the other suites link libsodium and
+need one built for the same target.
+
+Compilation establishes that the source is portable to the target. It does not establish
+digest correctness there -- that requires execution, either under Wine or by copying
+`build-win/` to a Windows machine and running the binaries.
+
+Verified from macOS/arm64 with MinGW-w64 GCC 16.2.0: the library compiles warning-free
+under `-Wall -Wextra -Wpedantic`, and both no-oracle suites link into PE32+ binaries.
+
+The MSYS2 commands above have not been exercised here; everything else in this section
+has been run.
 
 #### Two toolchains, one checkout
 
@@ -257,7 +265,7 @@ Each document owns a question and carries that topic whole.
 | document | owns | read it when |
 |---|---|---|
 | **README** (this file) | what the library is, its scope, how to build it, where everything lives | first |
-| [docs/UniBlake.md](docs/UniBlake.md) | *why* — the design argument: what BLAKE2b guarantees, what it does not, and what this library adds | deciding whether to use it |
+| [docs/UniBlake.md](docs/UniBlake.md) | *why* — the design argument: what BLAKE2b specifies, what it does not, and what this library adds | deciding whether to use it |
 | [docs/GUIDE.md](docs/GUIDE.md) | *how to call it* — recipes, interface reference, sizing rules, adapters, the C++ wrapper | writing calling code |
 | [docs/INTERNALS.md](docs/INTERNALS.md) | *how it works* — state, the compression kernel, porting, measurements | replacing a kernel or porting |
 | [docs/INTEGRATING.md](docs/INTEGRATING.md) | *how to adopt it* — swapping the hash in an existing codebase, in a validated order | migrating a consumer |

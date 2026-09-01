@@ -6,6 +6,7 @@
 #include <string.h>
 #include "ub_blake2.h"
 #include "ref_blake2.h"
+#include "ub_alloc.h"
 
 static int fails = 0, checks = 0;
 static void cmp(const char *what, const void *a, const void *b, size_t n) {
@@ -18,7 +19,7 @@ int main(void) {
   for (size_t i = 0; i < sizeof msg; i++) msg[i] = (unsigned char)(i * 7 + 1);
   for (size_t i = 0; i < sizeof key; i++) key[i] = (unsigned char)(i + 3);
 
-  ub_state *S = aligned_alloc(ub_state_align(), ub_state_size());
+  ub_state *S = ub_aligned_alloc(ub_state_align(), ub_state_size());
   ref_blake2b_state R;
 
   /* 1. streaming, unkeyed, across lengths and digest sizes */
@@ -70,7 +71,7 @@ int main(void) {
   ref_blake2b(want, 64, msg, 333, key, 32);
   cmp("one-shot", got, want, 64);
 
-  free(S);
+  ub_aligned_free(S);
   printf("blake2-alias: checks=%d fails=%d -> %s\n",
          checks, fails, fails ? "FAIL" : "PASS");
   return fails != 0;

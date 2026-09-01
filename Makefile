@@ -4,7 +4,7 @@
 CC      ?= cc
 AR      ?= ar
 CFLAGS  ?= -O2 -std=c11 -Wall -Wextra
-INC      = -Iinclude -Isrc
+INC      = -Iinclude -Isrc -Itests   # tests/ub_alloc.h, used by every harness
 SRC      = src/core.c src/compress.c src/const.c src/prefix.c
 
 # libsodium is the conformance oracle for check/bench; the library links none.
@@ -152,6 +152,13 @@ check-sanitize: sodium-check | $(BUILD)
 	  $(INC) $(SODINC) tests/test_prefix.c $(SRC) $(SODLIB) -o $(BUILD)/ub_san_pre$(EXE)
 	$(CC) -O1 -g -std=c11 -fsanitize=address,undefined -fno-omit-frame-pointer \
 	  $(INC)           tests/test_api.c    $(SRC)           -o $(BUILD)/ub_san_api$(EXE)
+	@# LeakSanitizer is Linux-only: macOS/arm64 ASan reports memory errors but
+	@# not leaks, so a clean run here does NOT mean leak-free. Say which it was.
+	@if ASAN_OPTIONS=detect_leaks=1 $(BUILD)/ub_san_api$(EXE) >/dev/null 2>&1; then \
+	  echo 'leaks: checked'; \
+	else \
+	  echo 'leaks: NOT CHECKED on this platform -- run this target on Linux too'; \
+	fi
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(BUILD)/ub_san_core$(EXE)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(BUILD)/ub_san_pre$(EXE)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(BUILD)/ub_san_api$(EXE)

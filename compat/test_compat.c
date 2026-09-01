@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ub_alloc.h"
 
 /* what compat_sodium.h defines, inlined here under ub_* names so both the
  * real libsodium and the shim are callable in one TU */
@@ -26,7 +27,7 @@ int main(void){
   for(size_t i=0;i<sizeof in;i++) in[i]=(unsigned char)(i*11+3);
   for(int i=0;i<64;i++) key[i]=(unsigned char)(i*3+1);
   for(int i=0;i<16;i++){salt[i]=(unsigned char)(0x30+i);pers[i]=(unsigned char)(0x70+i);}
-  ub_state *S=aligned_alloc(ub_state_align(),ub_state_size());
+  ub_state *S=ub_aligned_alloc(ub_state_align(),ub_state_size());
 
   /* personalization only: no key, no salt */
   unsigned char zp[16]={0}; memcpy(zp,"testtag1",8);
@@ -58,6 +59,7 @@ int main(void){
     ok(crypto_generichash_blake2b(big,64,in,3,NULL,0)==0,
        "one-shot accepts outlen 64",0); }
 
+  ub_aligned_free(S);
   printf("compat: checks=%d fails=%d -> %s\n",checks,fails,fails?"FAIL":"PASS");
   return fails!=0;
 }

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ub_alloc.h"
 static int checks, fails;
 static void ok(int c,const char*w,long i){checks++; if(!c){fails++; if(fails<6) printf("  FAIL %s [%ld]\n",w,i);}}
 static void oracle(uint8_t*o,size_t ol,const uint8_t*pre,size_t pl,
@@ -16,7 +17,7 @@ static void oracle(uint8_t*o,size_t ol,const uint8_t*pre,size_t pl,
   if(tl) crypto_generichash_blake2b_update(&s,t,tl);
   crypto_generichash_blake2b_final(&s,o,ol);
 }
-static ub_state *mk(void){ return aligned_alloc(ub_state_align(),ub_state_size()); }
+static ub_state *mk(void){ return ub_aligned_alloc(ub_state_align(),ub_state_size()); }
 int main(void){
   if(sodium_init()<0) return 77;
   uint8_t pre[512],a[64],b[64],pers[16];
@@ -84,6 +85,7 @@ int main(void){
     ok(ub_hash_n(S,4,0,1,0,24,sl,8)==UB_E_OUTCAP,"stride < len",0);
     free(full); free(sl); }
 
+  ub_aligned_free(S);
   printf("prefix: checks=%d fails=%d -> %s\n",checks,fails,fails?"FAIL":"PASS");
   return fails!=0;
 }

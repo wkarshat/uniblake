@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ub_alloc.h"
 
 static int checks, fails;
 static void ok(int c, const char *w){ checks++; if(!c){ fails++; printf("  FAIL %s\n", w);} }
@@ -16,7 +17,7 @@ static void handler(ub_status c, const char *fn, const char *detail, void *cooki
   (void)detail; (void)cookie;
   n_reports++; last_code=c; snprintf(last_fn,sizeof last_fn,"%s",fn);
 }
-static ub_state *mk(void){ return aligned_alloc(ub_state_align(), ub_state_size()); }
+static ub_state *mk(void){ return ub_aligned_alloc(ub_state_align(), ub_state_size()); }
 
 int main(void){
   setvbuf(stdout,NULL,_IONBF,0);
@@ -146,7 +147,7 @@ int main(void){
     ok(ub_hash_tail(S,pre,4,out,50)==UB_OK && n_reports==0, "hash_tail success is silent");
     n_reports=0;
     ok(ub_hash_n(S,4,0,1000,0,0,big,64)==UB_OK && n_reports==0, "batch success is silent");
-    free(F);
+    ub_aligned_free(F);
   }
 
   /* --- without a handler the code is still returned --- */
@@ -208,7 +209,7 @@ int main(void){
     /* the compat shims forward outlen into that same argument, so a caller
      * porting from libsodium inherits the behaviour above */
     ok(ub_hash(a,32,"abc",3,NULL,0)==UB_OK, "shim-shaped call still succeeds");
-    free(T);
+    ub_aligned_free(T);
   }
 
   /* --- narrowing casts must not admit an out-of-range value ---
@@ -255,8 +256,8 @@ int main(void){
 
     /* Snapshot the pre-final chaining value by finalizing a copy, then check
      * the original's bytes changed where the secret lived. */
-    ub_state *K = aligned_alloc(ub_state_align(), ub_state_size());
-    ub_state *C = aligned_alloc(ub_state_align(), ub_state_size());
+    ub_state *K = ub_aligned_alloc(ub_state_align(), ub_state_size());
+    ub_state *C = ub_aligned_alloc(ub_state_align(), ub_state_size());
     ub_init_key(K,32,key,sizeof key); ub_update(K,msg,sizeof msg);
     ub_copy(C,K);
     ub_final(C,dg,sizeof dg);              /* C is wiped */
@@ -277,14 +278,14 @@ int main(void){
     ok(ub_final(K,dg,sizeof dg)==UB_E_STATE,
                                         "keyed state still rejects a second final");
 
-    ub_state *U = aligned_alloc(ub_state_align(), ub_state_size());
+    ub_state *U = ub_aligned_alloc(ub_state_align(), ub_state_size());
     ub_init(U,64); ub_update(U,msg,sizeof msg); ub_final(U,dg,sizeof dg);
     const unsigned char *ub=(const unsigned char*)U;
     int u_clear=1; for(size_t i=0;i<64;i++) if(ub[i]) u_clear=0;
     ok(!u_clear, "unkeyed state is not wiped");
     ok(ub_final(U,dg,sizeof dg)==UB_E_STATE,
                                         "unkeyed state rejects a second final");
-    free(K); free(C); free(U); }
+    ub_aligned_free(K); ub_aligned_free(C); ub_aligned_free(U); }
 
   printf("api: checks=%d fails=%d -> %s\n",checks,fails,fails?"FAIL":"PASS");
   free(big);

@@ -41,6 +41,11 @@
   ("comprehensive", "all platforms").
 - Direct and factual. No concluding cheer, no redundant summary, no
   standalone acknowledgment sentence. Report what was verified or changed.
+- No stock metaphors or security-marketing phrases ("defence in depth", "last
+  line of defence", "free lunch", "silver bullet"). State the mechanism and
+  its scope: what is covered, what is not.
+- No filler qualifiers ("worth noting", "worth doing", "of course", "in
+  practice", "it turns out"). If a thing is worth doing, state why.
 
 ## Code
 

@@ -28,8 +28,8 @@ anything:
 
 - total wall time for the whole operation, several runs, median not mean;
 - the hashing share of it. If the tree has no instrumentation, add a timer
-  around the hashing loop rather than guessing -- the share decides whether
-  this work is worth doing at all.
+  around the hashing loop rather than guessing. The share bounds the
+  achievable speedup.
 
 Run at least eight repetitions per configuration and compare medians; single
 runs are noise.
@@ -91,8 +91,8 @@ ub_hash_n(&base_state, 4, first_index, count, 0, 0, out, row_stride);
 
 and call `ub_prefix_check(&base_state, 4)` once after absorbing the prefix. If
 it returns `UB_E_GEOMETRY`, the prefix length leaves no room for the counter
-and the fast path does not apply -- a fact worth knowing at startup rather
-than discovering as a slowdown.
+and the fast path does not apply. Determined at startup rather than observed
+later as a slowdown.
 
 Where the consumer reads fixed-width fields out of each digest, `off`/`len`
 write just that field, packed, with no second pass.

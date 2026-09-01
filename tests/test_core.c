@@ -5,12 +5,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include "ub_alloc.h"
 
 /* Opaque state: allocate as a real consumer does. */
 #define UBS(name) ub_state *name = alloca_state()
 static void *pool[8]; static int pooln;
 static ub_state *alloca_state(void){
-  if(pooln<8 && !pool[pooln]) pool[pooln]=aligned_alloc(ub_state_align(),ub_state_size());
+  if(pooln<8 && !pool[pooln]) pool[pooln]=ub_aligned_alloc(ub_state_align(),ub_state_size());
   return (ub_state*)pool[pooln++ % 8];
 }
 static void pool_reset(void){ pooln=0; }
@@ -78,6 +79,7 @@ int main(void){
     ok(ub_update(S,in,1)==UB_E_STATE,"update after final",0);
     ok(ub_init(S,0)==UB_E_ARG,"outlen 0",0);
     ok(ub_init(S,65)==UB_E_ARG,"outlen 65",0); }
+  for(int i=0;i<8;i++) ub_aligned_free(pool[i]);
   printf("core: checks=%d fails=%d -> %s\n",checks,fails,fails?"FAIL":"PASS");
   return fails!=0;
 }

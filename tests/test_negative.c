@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ub_alloc.h"
 
 /* --- the wrong kernel: eleven rounds instead of twelve --- */
 #define G(r,i,a,b,c,d)                                     \
@@ -68,7 +69,7 @@ int main(void){
   for (size_t i=0;i<sizeof in;i++) in[i]=(uint8_t)(i*31+7);
   for (int i=0;i<32;i++) key[i]=(uint8_t)(i+1);
   for (int i=0;i<16;i++) pers[i]=(uint8_t)(0xA0+i);
-  ub_state *S = aligned_alloc(ub_state_align(), ub_state_size());
+  ub_state *S = ub_aligned_alloc(ub_state_align(), ub_state_size());
 
   /* the RFC 7693 published vector */
   static const uint8_t kat[64]={
@@ -110,6 +111,7 @@ int main(void){
     crypto_generichash_blake2b_final(&s,b,50); }
   must_differ(memcmp(a,b,50)!=0, "oracle, prefix path");
 
+  ub_aligned_free(S);
   printf("negative: %d rejections, %d missed -> %s\n",
          caught, missed, missed ? "FAIL" : "PASS");
   return missed != 0;
