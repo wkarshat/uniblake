@@ -95,6 +95,7 @@ make check-wipe-modes SODIUM=<prefix>       # secret-wiping compiled in and out
 make check-negative SODIUM=<prefix>         # proves the suites can fail
 make check-sanitize SODIUM=<prefix>         # ASan + UBSan; leak checks are Linux-only
 make bench SODIUM=<prefix>                  # ns/digest for this machine
+make probe                                  # CPU identity; report it with any figure
 ```
 
 ### Setup and details, per platform
@@ -306,8 +307,9 @@ See [docs/GUIDE.md](docs/GUIDE.md#adapters).
 include/uniblake/   public headers
 src/                implementation
 compat/             adapter headers (compat/ref: vendored oracle)
-backends/           alternative NEON and threaded implementations
+backends/           alternative NEON and threaded kernels (backends/vendor: donor macros)
 tests/  bench/      conformance, measurement
+probe/              CPU identity and ISA flags (make probe)
 docs/
 ```
 

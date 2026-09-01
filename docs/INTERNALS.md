@@ -278,6 +278,11 @@ generations, so a number transferred from one host to another is unsupported.
 State the exact CPU, compiler, flags and input shape with every measurement,
 and re-run `make bench` on the target rather than citing a recorded figure.
 
+`make probe` prints the identity to report it with: vendor, brand, and the
+generation coordinates that distinguish cores of the same ISA -- x86
+family/model/stepping, ARM MIDR implementer/part. It also lists ISA flags,
+which say an instruction exists, not that a kernel using it is faster.
+
 Measure the shape the caller actually uses. A bulk-throughput loop and a
 short-message loop can rank implementations differently, and optimising
 against the wrong one is how a kernel gets faster on a benchmark and slower in

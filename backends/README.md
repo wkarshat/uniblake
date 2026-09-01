@@ -6,9 +6,12 @@ checked with the same suites as the shipped code.
 | file | replaces | build |
 |---|---|---|
 | `compress_neon.c` | `ub_compress` | drop `src/compress.c`, add this |
+| `compress_neon_unrolled.c` | `ub_compress` | same; uses the macros in `vendor/` |
 | `hash_n_threads.c` | `ub_hash_n` | `-DUB_HASH_N_SERIAL -DUB_THREADS=N`, add this, `-lpthread` |
 
-Both pass the core and prefix suites unchanged.
+All three pass the core and prefix suites unchanged; `make check-backends`
+runs them. `vendor/` holds third-party macros with their own README, source
+and license.
 
 ## Measurements
 
@@ -24,14 +27,57 @@ Prefix 140 B, digest 50 B, median of 7 reps x 400k digests.
 
 Figures from one machine; re-measure on the target.
 
-## NEON is slower here, and that is expected
+## NEON is slower here, from two causes
 
-2-lane NEON loses to this core's scalar execution: 138.6 ns against 92.9, a
-1.5x loss. BLAKE2b's G-function gives only two independent 64-bit lanes within
-one message, so a 128-bit register buys one doubling while wide scalar issue
-already extracts more. Published BLAKE2b results show the same code faster
-than scalar on some ARM cores and slower on others, so this is a property of
-the core, not of the code.
+143.1 ns against 89.2 scalar on the M4 Pro, a 1.6x loss. Two distinct reasons,
+and only the first is inherent.
+
+**The algorithm.** BLAKE2b's G-function exposes two independent 64-bit lanes
+within one message, so a 128-bit register buys one doubling while wide scalar
+issue already extracts more. Published results have the same NEON code faster
+than scalar on some ARM cores and slower on others, so the sign of this term
+depends on the core.
+
+**This implementation's message gather.** The round loop indexes `ub_sigma` at
+runtime and assembles each message vector one lane at a time. In the generated
+code that is five instructions per vector -- two `ldrb` for the sigma bytes, an
+address `add`, a scalar `ldr` for lane 0, and `ld1.d {v}[1]` for lane 1 --
+eight vectors per round, twelve rounds. Roughly 480 instructions of gather
+against 24 `add.2d` of G-function work.
+
+The reference package's NEON code avoids this entirely: it unrolls all twelve
+rounds and emits 48 `LOAD_MSG_r_n` macros that build each vector with
+`vcombine_u64` from message words already in registers. No runtime sigma
+lookup, no lane inserts.
+
+That hypothesis was tested and is wrong. `compress_neon_unrolled.c` is the
+same kernel built on the reference package's own `blake2b-round.h` and
+`blake2b-load-neon.h`: twelve rounds unrolled, sigma resolved at compile time,
+no lane inserts. It is correct -- 630 core and 45,531 prefix checks against
+libsodium -- and **slower still**, 187 ns against the looped kernel's 144.
+
+The cause is register pressure. Holding m0..m7 live across all twelve rounds
+alongside eight row registers and the temporaries exhausts aarch64's 32 vector
+registers: the unrolled kernel touches all 32 and spills 49 times against the
+looped kernel's 12. `-O3` and `-Os` do not change it. This is the same failure
+mode recorded for scalar unrolling in docs/INTERNALS.md.
+
+The reference package's own NEON implementation, measured directly on this
+core in a separate harness, comes to 359 ns/digest against 158 for its own
+scalar reference -- a 2.3x loss for expert-written, fully-unrolled code. So the
+loss is a property of this core, and the gather strategy was a second-order
+term rather than the cause.
+
+| kernel | ns/digest |
+|---|--:|
+| uniblake scalar | 90 |
+| uniblake NEON, looped | 144 |
+| uniblake NEON, unrolled | 187 |
+| reference package NEON (own harness) | 359 |
+| reference package scalar (own harness) | 158 |
+
+Conclusion: on this core, no BLAKE2b NEON arrangement tested beats scalar.
+Keep both kernels as measured evidence; adopt neither here.
 
 The kernel is kept because it is correct, measured, and the right starting
 point on a core where scalar is weaker. It should not be adopted without

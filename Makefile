@@ -90,11 +90,28 @@ clean:
 
 .PHONY: all check bench clean sodium-check check-alias
 
+# CPU identity and ISA flags. Not part of the library -- the core has no
+# dispatch -- but a measurement should be reported with the machine it came
+# from, and a future selector needs core identity, not just ISA flags.
+probe:
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Iprobe probe/ub_probe_main.c probe/ub_probe.c -o $(BUILD)/ub_probe$(EXE)
+	@$(BUILD)/ub_probe$(EXE)
+
+.PHONY: probe
+
 # Prototype backends (see backends/README.md). Not part of `all`.
 bench-neon: | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) $(SODINC) bench/bench_prefix.c \
 	  src/core.c src/const.c src/prefix.c backends/compress_neon.c $(SODLIB) -o $(BUILD)/ub_bench_neon$(EXE)
 	$(BUILD)/ub_bench_neon$(EXE)
+
+bench-neon-unrolled:
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(INC) $(SODINC) bench/bench_prefix.c \
+	  src/core.c src/const.c src/prefix.c backends/compress_neon_unrolled.c \
+	  $(SODLIB) -o $(BUILD)/ub_bench_nu$(EXE)
+	$(BUILD)/ub_bench_nu$(EXE)
 
 bench-threads: | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) $(SODINC) -DUB_HASH_N_SERIAL -DUB_THREADS=$(THREADS) \
@@ -108,9 +125,32 @@ check-negative: | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) $(SODINC) tests/test_negative.c src/core.c src/const.c src/prefix.c $(SODLIB) -o $(BUILD)/ub_negative$(EXE)
 	$(BUILD)/ub_negative$(EXE)
 
+# Each compression backend runs the full oracle set, not just core+prefix: a
+# kernel that only replaces ub_compress still has to satisfy the adapter and
+# the return-code contract. NEON kernels are skipped on non-aarch64, where they
+# compile to an empty translation unit and the scalar compress is absent.
+UB_KERNELS = compress_neon compress_neon_unrolled
+
 check-backends: | $(BUILD)
-	$(CC) $(CFLAGS) $(INC) $(SODINC) tests/test_core.c   src/core.c src/const.c src/prefix.c backends/compress_neon.c $(SODLIB) -o $(BUILD)/ub_nc$(EXE) && $(BUILD)/ub_nc$(EXE)
-	$(CC) $(CFLAGS) $(INC) $(SODINC) tests/test_prefix.c src/core.c src/const.c src/prefix.c backends/compress_neon.c $(SODLIB) -o $(BUILD)/ub_np$(EXE) && $(BUILD)/ub_np$(EXE)
+	@case "$$(uname -m)" in \
+	  arm64|aarch64) ;; \
+	  *) echo "check-backends: NEON kernels skipped on $$(uname -m)"; exit 0 ;; \
+	esac; \
+	for k in $(UB_KERNELS); do \
+	  echo "== $$k =="; \
+	  for t in core prefix; do \
+	    $(CC) $(CFLAGS) $(INC) $(SODINC) tests/test_$$t.c \
+	      src/core.c src/const.c src/prefix.c backends/$$k.c $(SODLIB) \
+	      -o $(BUILD)/ub_bk$(EXE) && $(BUILD)/ub_bk$(EXE) || exit 1; \
+	  done; \
+	  $(CC) $(CFLAGS) $(INC) $(SODINC) compat/test_compat.c \
+	    src/core.c src/const.c src/prefix.c backends/$$k.c $(SODLIB) \
+	    -o $(BUILD)/ub_bk$(EXE) && $(BUILD)/ub_bk$(EXE) || exit 1; \
+	  $(CC) $(CFLAGS) $(INC) tests/test_api.c \
+	    src/core.c src/const.c src/prefix.c backends/$$k.c \
+	    -o $(BUILD)/ub_bk$(EXE) && $(BUILD)/ub_bk$(EXE) || exit 1; \
+	done
+	@echo "== hash_n_threads =="
 	$(CC) $(CFLAGS) $(INC) $(SODINC) -DUB_HASH_N_SERIAL tests/test_prefix.c $(SRC) backends/hash_n_threads.c $(SODLIB) -lpthread -o $(BUILD)/ub_tp$(EXE) && $(BUILD)/ub_tp$(EXE)
 
 # Portability gate: the library must build warning-free under both compilers,
@@ -169,5 +209,5 @@ check-sanitize: sodium-check | $(BUILD)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(BUILD)/ub_san_pre$(EXE)
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 $(BUILD)/ub_san_api$(EXE)
 
-.PHONY: bench-neon bench-threads check-backends check-negative check-portable
+.PHONY: bench-neon bench-neon-unrolled bench-threads check-backends check-negative check-portable
 .PHONY: check-wipe-modes check-sanitize
