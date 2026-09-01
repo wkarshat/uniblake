@@ -409,6 +409,16 @@ the code rather than a test result. Closing it needs a cross-compiler
 rather than merely compile, QEMU. Compile-only costs one package and one
 `make`, and establishes less than execution; report it as such.
 
+### Incremental builds
+
+Objects carry compiler-generated header dependencies (`-MMD -MP`, emitted as
+`.d` files beside them under `BUILD`). Editing `src/internal.h` or a public
+header rebuilds every object that included it.
+
+This matters more than usual here: `internal.h` defines `struct ub_state`, so
+a stale object linked against a changed layout is a silent memory error, not a
+compile failure.
+
 ### Allocation in the harnesses
 
 The library never allocates. The test and bench harnesses do, and they need

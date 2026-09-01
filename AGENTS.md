@@ -55,6 +55,8 @@
   the same file. A local never rebinds a parameter to a different type.
 - `include/` and `src/` stay self-contained and dependency-free: vendoring
   those two directories alone must work.
+- Objects track header dependencies via `-MMD -MP`. A new source or include
+  directory must keep that, or a header edit will leave stale objects.
 
 ## Verification
 

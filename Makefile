@@ -56,9 +56,15 @@ all: $(LIB)
 $(LIB): $(OBJ)
 	$(AR) rcs $@ $(OBJ)
 
+# -MMD -MP emits a .d file listing the headers each object actually included,
+# so editing internal.h or a public header rebuilds what depends on it. Without
+# this, a header change leaves stale objects -- and internal.h defines
+# struct ub_state, so a stale object means a layout mismatch, not a warning.
 $(BUILD)/%.o: src/%.c
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(INC) -c $< -o $@
+	$(CC) $(CFLAGS) $(INC) -MMD -MP -c $< -o $@
+
+-include $(OBJ:.o=.d)
 
 # The BLAKE2 author-reference alias shim, checked against the vendored
 # reference (compat/ref). Needs no libsodium, so it joins the default `check`.
