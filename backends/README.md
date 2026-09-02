@@ -12,37 +12,22 @@ checked with the same suites as the shipped code.
 `make check-backends` runs the kernels this host can execute. `make probe`
 reports whether a CPU has AVX2.
 
-**The AVX2 kernel can be built and run on an Apple-silicon Mac.** Apple clang
-is a cross-compiler and Rosetta 2 executes AVX2 even though it does not
-advertise it in CPUID:
-
-```
-make check-avx2-rosetta        # builds x86-64, runs under Rosetta
-```
-
-That covers the published vectors (1,536) and the API suite (155). It cannot
-cover the oracle suites, because a Homebrew libsodium is arm64 and cannot be
-linked into an x86-64 binary -- so those need a real x86-64 host, or a
-libsodium built for x86-64.
-
-Emulation establishes correctness and nothing about speed. There is still no
-AVX2 timing; `make bench-avx2` on real x86-64 is the only thing that produces
-one. On a native x86-64 host use `make check-avx2` and `make bench-avx2`, or
-cross-compile with `CC=x86_64-w64-mingw32-gcc EXE=.exe`.
-
-The AVX2 kernel passes the oracle suites on x86-64 and is measured below.
+On x86-64 the AVX2 kernel passes the oracle suites and is measured below:
+`make check-avx2` and `make bench-avx2`. Without an x86-64 host, Apple clang
+cross-compiles and Rosetta 2 executes AVX2 despite not advertising it in
+CPUID -- `make check-avx2-rosetta` covers the published vectors and the API
+suite, but not the oracle suites, which need a libsodium built for the same
+architecture. Emulation checks correctness, never speed.
 
 ## Measurements
 
 Apple M4 Pro (arm64, 14 cores), Apple clang -O2, libsodium 1.0.21.
 Prefix 140 B, digest 50 B, median of 7 reps x 400k digests.
 
-A row compares builds on **this** part, at this core count, cache and memory
-configuration, on this working-set size. It is not a comparison between
-instruction sets: NEON here is one implementation on one Apple core, and says
-nothing about AVX2 on an x86-64 part of some other generation. The concurrent
-rows likewise measure this chip's cores and memory system, not threading in
-general.
+Each table compares builds on **one** part, at its core count, cache and
+memory configuration, on this working-set size. Rows within a table are
+comparable; rows across tables are not, and neither table says anything about
+an instruction set in general.
 
 | build | streaming | `ub_hash_n` |
 |---|--:|--:|
@@ -51,10 +36,7 @@ general.
 | 4 threads | 79.9 ns | 23.9 ns |
 | 8 threads | 80.9 ns | 12.3 ns |
 
-Figures from one machine; re-measure on the target.
-
-Intel Skylake, 2 cores, GCC 13 -O2, libsodium 1.0.18. Same geometry: prefix
-140 B, digest 50 B, median of 7 reps x 400k digests.
+Intel Skylake, 2 cores, GCC 13 -O2, libsodium 1.0.18, in a VM. Same geometry.
 
 | build | streaming | `ub_hash_n` |
 |---|--:|--:|
@@ -62,11 +44,16 @@ Intel Skylake, 2 cores, GCC 13 -O2, libsodium 1.0.18. Same geometry: prefix
 | AVX2 | 136.9 ns | 147.5 ns |
 | 2 threads | 215.1 ns | 118.7 ns |
 
-AVX2 is 1.6x scalar. The threaded row moves only `ub_hash_n`: that call
-computes independent digests and splits across cores, while streaming is a
-single dependent chain and stays at scalar speed.
+AVX2 is 1.6x scalar. Threading moves only `ub_hash_n`: it computes independent
+digests and splits across cores, while streaming is one dependent chain and
+stays at scalar speed.
 
-Measured in a VM; re-measure on the target.
+Unlike the aarch64 build, `src/compress.c` does not auto-vectorize on x86-64 --
+GCC and clang both emit scalar code, and `-march=native` does not change it.
+That is why the AVX2 kernel is worth building here and the NEON kernel is not
+worth building there.
+
+Figures from one machine; re-measure on the target.
 
 ## Why the scalar unrolling win does not transfer to NEON
 
@@ -82,7 +69,7 @@ extra live values.
 **Tried on NEON, and it does not transfer.** Resolving the permutation at
 compile time -- twelve `ROUND()` invocations with literal indices, gather
 otherwise unchanged -- passes every suite and measures **163.6 ns against the
-shipped kernel's 136.0**. It does remove the sigma loads exactly as intended:
+shipped kernel's 142.8**. It does remove the sigma loads exactly as intended:
 read from the generated code, all 9 `ldrb` become 0. It also takes the body
 from 157 instructions to 1056 and introduces 24 spill stores where the looped
 kernel has none.
@@ -111,10 +98,9 @@ message is gathered.
 
 ## NEON is slower than scalar here
 
-Both NEON kernels are correct and both lose to the scalar compression on an
-Apple M4 Pro. Six formulations were tried; the fastest is the shipped one. The
-question worth answering is not "which formulation" but **what the ceiling
-is**, because that is what transfers to other cores and other projects.
+Six formulations were tried; the fastest is the shipped one. The question
+worth answering is not "which formulation" but **what the ceiling is**,
+because that is what transfers to other cores and other projects.
 
 ### Where the time goes, measured per instruction
 
@@ -171,46 +157,15 @@ dead end on this class of core and the numbers above say why.
 
 ### The kernels as they stand
 
-
-Both NEON kernels are correct and both lose to the scalar compression on an
-Apple M4 Pro:
-
-| kernel | ns/digest |
-|---|--:|
-| scalar (`src/compress.c`) | 79.2 |
-| `compress_neon.c` | 142.8 |
-
-BLAKE2b's G function exposes only two independent 64-bit lanes within one
-message, so a 128-bit register buys one doubling while wide scalar issue
-already extracts more.
-
-An unrolled variant measured 187 ns -- worse still -- and was removed;
-recover it from the `neon-both-kernels` tag. **The reason is not register
-pressure.** Read from the generated code, that kernel spills *less* per
-instruction than the looped one (4.1% against 6.0%) and eliminates the nine
-sigma byte-loads entirely. What it adds is shuffling: 347 `ext` instructions
-against the looped kernel's 8 `ld1`, because the donor's `LOAD_MSG` macros
-assemble each message vector with `vext`/`vcombine` rather than lane inserts.
-On this core that trade loses.
-
-That correction matters because the same "unrolling exhausts the registers"
-reasoning was recorded for the scalar kernel and proved wrong there too:
-hand-unrolling with literal sigma indices gained 11% and *reduced* spilling.
-
-The sign of the loss depends on the core, so the kernel is kept: correct,
+The sign of the loss depends on the core, so the NEON kernel is kept: correct,
 measured, and the right starting point where scalar is weaker. Do not adopt it
-without measuring there.
-
-Where SIMD pays for BLAKE2b is across *independent* messages -- one hash per
-lane rather than one hash split over lanes. That needs a batch-aware
-compression interface these prototypes do not have; `ub_hash_n` is the entry
-point where such an implementation belongs.
+without measuring there. The unrolled variant is recoverable from the
+`neon-both-kernels` tag.
 
 ## Threading scales, because the digests are independent
 
-`ub_hash_n` splits cleanly: each digest is independent, the prefix state is
-read-only, and each thread copies it and writes its own slice of the output.
-No locks, no shared counters.
+Each digest is independent, the prefix state is read-only, and each thread
+copies it and writes its own slice of the output. No locks, no shared counters.
 
 Measured on the M4 Pro, prefix 140 B, digest 50 B:
 
