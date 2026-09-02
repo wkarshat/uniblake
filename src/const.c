@@ -1,4 +1,8 @@
 /* Copyright (c) 2026 UniBlake Developers */
+/* SIGMA and the IV, as specified. SIGMA is RFC 7693 s2.7 and the IV is s2.6;
+ * both are fixed by the standard, so these tables are identical in every
+ * conforming implementation. They are transcribed from the RFC, not copied
+ * from another implementation, and this library uses no third-party code. */
 #include "internal.h"
 const uint64_t ub_iv[8] = {
   0x6a09e667f3bcc908ULL, 0xbb67ae8584caa73bULL, 0x3c6ef372fe94f82bULL,

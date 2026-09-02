@@ -39,9 +39,10 @@ int main(void){
   for (int i = 0; i < PRE; i++) pre[i] = (uint8_t)(i*7+1);
   double t[REPS];
 
+  /* ub_init_personal is the shape a caller uses; it must cost the same as the
+   * parameter-block spelling it replaces. */
   ub_state *S = ub_aligned_alloc(ub_state_align(), ub_state_size());
-  ub_param P; ub_param_init(&P, OUT);
-  ub_init_param(S, &P); ub_update(S, pre, PRE);
+  ub_init_personal(S, OUT, NULL); ub_update(S, pre, PRE);
   ub_state *W = ub_aligned_alloc(ub_state_align(), ub_state_size());
 
   /* Steady clock before timing: see bench_compare.c. */

@@ -5,54 +5,141 @@ sample size lives in this file so the permanent documents do not carry
 figures that rot. Prune each pass — finished, dropped and superseded items
 come out, they do not accumulate.
 
-## Active
+## Lines of development
 
-**Reconcile `ub_param` with the Rust `Params`.** C exposes all twelve RFC 7693 parameter-block
-fields through `ub_param`/`ub_init_param`; Rust exposes four
-(`hash_length`, `key_length`, `salt`, `personal`). The reference
-implementation settles the shape: libsodium keeps its `blake2b_param`
-**entirely private** and its public API is `_init`, `_init_salt_personal` —
-callers never see the twelve. Neither of ours should expose twelve either.
-Blocked on: `ub_param` has 33 uses in tests and is the documented way to set
-personalization, so narrowing is a public break. Next step is
-`ub_init_personal` (additive), after which `ub_init_param` becomes the escape
-hatch rather than the path.
+Grouped by what they touch, with dependencies stated. A line is *decided* when
+its shape is settled and only the work remains; *open* when a question must be
+answered first.
 
-**Oracle dependency floor.** `cargo test` needs a newer toolchain than the
-library does, because `blake2b_simd 1.0.5` requires 1.85 through two
-independent causes: edition 2024 in its own manifest, and
-`constant_time_eq 0.4.2`, which declares `rust-version = 1.85.0`.
+### 1. C API completion — decided, no dependencies
 
-Proved that neither is the *code*: reverting the manifest to edition 2021 and
-the dependency to 0.3, with no source change, builds `blake2b_simd 1.0.5`
-cleanly on rustc 1.82 and 1.69. The 1.85 floor is packaging, not language
-features.
+`ub_init_personal` and `ub_set_wipe` are in. Nothing else in this line is
+blocked. What remains is presentational: the guide and README still show
+`ub_param` assembly as the ordinary path for setting a personalization tag,
+which is now the long way round.
 
-Upstream position, from the tracker: issue #30 is open but the reporter
-proposed closing it in 2024, and on the pull request that caused it the
-maintainer wrote that there is no concrete MSRV policy, "but if we did it
-would probably be something close to 'last three stable versions'". A pull
-request adding `rust-version` would run against that stance, so **do not
-file one**. Pull request #23, which proposed replacing `constant_time_eq`
-with `subtle`, was also closed unmerged — the dependency is deliberately
-aligned with the successor project.
+### 2. Rust API correctness — decided, blocks line 3
 
-**Resolution here: pin the oracle.** `blake2b_simd = "=1.0.2"` as a
-dev-dependency. Verified: all 17 tests pass on **rustc 1.75**, which is what
-the current Ubuntu LTS ships, and on current stable. The library itself builds
-on 1.75 either way — only the test path was constrained.
+Fallible constructors. The builder must not panic on caller input; follow the
+shape the ecosystem standard uses -- validate in the public constructor,
+return `Result`, keep the assert as an internal invariant behind it. Needs a
+`Params` error enum naming the conditions the C side already names.
 
-**Slice versus pointer+length for a batch output.** Open, needs review.
-Current position is that the two languages should differ, with the caveat that
-bounds-check hoisting in a strided write loop must be *verified* in generated
-code rather than assumed. No decision.
+**Blocks line 3**, because a batch entry point's return type should be that
+same enum rather than a second one invented alongside it.
 
-**Multi-message SIMD: disposition under consideration.** Not adopted, not
-rejected. In scope as a technique (each message still gets a plain BLAKE2b
-digest, unlike BLAKE2bp). The question is whether a batch entry point should
-use it, which interacts with whether that entry point exists at all.
+### 3. Batch entry point over a shared prefix — open
+
+The consumer's solver loop is exactly this shape: clone a prefix state, append
+a little-endian counter, finalize, read the digest in fixed-width slices. No
+reference implementation can express it -- their batch APIs take whole inputs
+and re-absorb the prefix per digest.
+
+Open questions, none answered: how the tail width is spelled, how output is
+passed, what it returns. Depends on line 2 for the error type and on line 5
+for whether a vector implementation sits underneath.
+
+### 4. Cross-language parity — decided, independent
+
+State sizes already match at 216 bytes. What remains is a test asserting the C
+and Rust parameter-block serializers emit byte-identical 64 bytes from
+equivalent inputs. That test is the parity guarantee; equal `sizeof` is a weak
+proxy for it.
+
+Parameter *surfaces* stay as they are -- see the decision below.
+
+### 5. Vector kernels — partly open, informs line 3
+
+- **NEON, single message: closed.** Measured to its ceiling. A scalar rotate
+  is 4.6x cheaper than the NEON rot63 that replaces it, and 2-wide SIMD over
+  one message does not shorten the dependency chain, so the vector path pays
+  more latency per step to remove parallelism a wide core already extracts.
+  `make bench-isa` reproduces the per-instruction figures. No further
+  single-message NEON work.
+- **NEON, two independent messages: open and untried.** The only formulation
+  where lane width becomes real parallelism. Expected below 2x because the
+  rot63 penalty is per lane-group, but worth measuring.
+- **AVX2 last-round rotate deferral: open.** `ROT63` is three instructions
+  against one for the other rotations, and the final round's is what the
+  output XOR can absorb. Needs a real x86-64 host to measure.
+- **x86-64 scalar last-round deferral: open.** Free on aarch64 because the
+  compiler fuses it into the output XOR; x86 has no such encoding, so the four
+  rotates are real instructions there.
+
+### 6. Cross-platform measurement — open, no dependencies
+
+Every figure is aarch64 on one machine. Needs a Linux x86-64 run of the same
+harnesses, and a Linux aarch64 run to separate "this instruction set" from
+"this core". The harnesses are portable C and Rust and need no porting; only
+the assembly counter needs x86 patterns.
+
+## Decisions recorded
+
+**Parameter surfaces: keep as they are, revisit later.** C keeps `ub_param`
+with all twelve fields the BLAKE2 reference defines; the Rust `Params` keeps
+its four.
+
+- The twelve match the authors' own reference header exactly in name, type and
+  order -- only `reserved[14]` is absent, because the reference memcpy's a
+  packed struct as the 64-byte block while this library serializes field by
+  field. The C surface is the reference's, not idiosyncratic.
+- All twelve are reachable through exactly one function, `ub_init_param`. The
+  convenience constructors are narrower: `ub_init` sets one field,
+  `ub_init_key` two, `ub_init_personal` two. Nothing here sets a tree field.
+- Two things depend on the twelve staying reachable: reproducing a third-party
+  digest made with a non-default tree parameter, and the libsodium shim's
+  salt+personal+key sequence, which must stop between building the block and
+  absorbing the key.
+- Narrowing either side is a public break, and equalizing them is not required
+  for the state-size parity already achieved.
+
+Revisit when: a consumer wants a tree parameter from Rust; the shim stops
+needing the staged sequence; or a public-API revision opens for another reason.
+
+**Consumer compatibility: confirmed by compilation, not by inspection.** An
+observed call site compiles against this crate with one line changed -- the
+crate name -- and produces a byte-identical digest to the reference. Verified
+on rustc 1.75 by a test crate that transcribes the call site verbatim and
+asserts equality against the reference crate.
+
+One incompatibility exists and is the only one: builder methods take `self`
+here and `&mut self` in the reference, so the non-chained form
+(`let mut p = Params::new(); p.hash_length(32);`) does not compile -- confirmed
+by compiling it and reading the error. Every observed call site chains, so none
+is affected. **No adapter is needed**, and a compatibility facade would freeze
+the reference's convention into this API permanently to save that one rewrite.
+
+**Toolchain floor: rustc 1.75**, the version the current Ubuntu LTS ships and
+the environment tests run in. The oracle is pinned to `blake2b_simd = "=1.0.2"`
+because 1.0.3+ moved to edition 2024 and a dependency declaring 1.85; neither
+is a code requirement -- 1.0.5's source builds on 1.69 with its manifest
+reverted -- so the pin costs nothing. Revisit if a consumer requirement forces
+it; two observed consumers already declare 1.85 and 1.88.
+
+**Reference oracle: libsodium 1.0.21**, the version the consuming project
+builds from source with a pinned tarball and hash. Not a distribution package,
+and not a dependency of this library -- see the README.
 
 ## Backlog
+
+### API additions, not yet built
+
+Collected from the requirements review; none is implemented. Kept here rather
+than in a permanent document because unshipped design is state, not
+documentation.
+
+- **Rust batch entry point over a shared prefix.** The consumer's solver loop
+  is already this shape: clone a prefix state, append a little-endian counter,
+  finalize, read the digest in fixed-width slices. The reference crate's batch
+  API cannot express it, because its job type starts from the initial state
+  and takes a whole input, so a shared prefix is re-absorbed per digest.
+  Design questions recorded and unresolved: how the tail width is spelled, how
+  output is passed, and what it returns.
+- **Rust fallible constructors.** The builder must not panic on caller input.
+  Follow the shape RustCrypto uses: validate in the public constructor, return
+  `Result`, keep the assert as an internal invariant behind it. Needs a
+  `Params` error enum naming the same conditions the C side names, which is
+  also what any future fallible entry point returns — so design it once.
 
 ### Documentation refactor
 
@@ -63,7 +150,7 @@ the work is not re-derived:
 | file | lines | problem |
 |---|--:|---|
 | `docs/INTERNALS.md` | 1192 | absorbed the C/Rust comparison, the x86 procedure and the parameter analysis; now spans kernel internals, cross-language design and a porting runbook |
-| `docs/INTEGRATING.md` | 1028 | absorbed the consumer survey and the API proposal; now spans migration steps, requirements evidence and unbuilt-API design |
+| `docs/INTEGRATING.md` | 122 | **done 2026-09-01**: the 906-line API proposal moved here, leaving the migration guide |
 | `docs/GUIDE.md` | 632 | absorbed the wiping material |
 | `README.md` | 414 | carries scope, build, layout, the document contract and the naming rule |
 | `docs/UniBlake.md` | 215 | the design argument; the least changed |
@@ -90,8 +177,8 @@ point at the others:
    cross-language design are separate questions from the kernel, and are what
    pushed this past a thousand lines.
 5. `INTEGRATING.md` — how to migrate an existing consumer. Audience: someone
-   swapping out another BLAKE2b. **The unbuilt-API design does not belong
-   here** and should move to `TODO.md`, which is where unshipped work lives.
+   swapping out another BLAKE2b. Done: the unbuilt-API design moved to this
+   file, which is where unshipped work lives.
 6. `TODO.md` — state, and every figure.
 
 **Rules to apply while doing it:** no restating what an adjacent paragraph
@@ -172,6 +259,18 @@ inline figures did.
 
 ## Done (recent only)
 
+- `ub_init_personal(S, outlen, personal)` — digest length plus a 16-byte tag,
+  the shape every observed caller uses, without assembling a parameter block.
+  Tested for byte equality with the long spelling it replaces, for equality
+  with `ub_init` when the tag is NULL, and that a different tag changes the
+  digest.
+- `ub_set_wipe(S, on)` — runtime per-state control over final-state wiping,
+  defaulting on for keyed states and off otherwise. Tested that it overrides
+  in both directions, does not change the digest, is carried by `ub_copy`, and
+  is rejected after finalization. Absent when built `-DUB_WIPE=0`. The
+  internal `keyed` field is renamed `wipe`, for what it controls rather than
+  for what usually sets it.
+
 - C state 216 bytes, matching Rust. Dropped `f[2]`; the finalization mask is a
   kernel argument and a one-byte `fin` carries the guard.
 - Rust state ABI-invariant at 216 bytes across targets and toolchains
@@ -193,14 +292,19 @@ inline figures did.
 ## Figures
 
 Every measured number, with the conditions. Apple M4 Pro, clang -O2,
-aarch64, unless stated. Reproduce with the `make` targets above; A/B figures
+aarch64, unless stated. Reference oracle is libsodium **1.0.21**, the version
+the consuming project builds; figures taken before that was fixed used the
+1.0.22 available from a package manager, which affects only the libsodium
+comparison rows, not any uniblake figure. Reproduce with the `make` targets above; A/B figures
 use `tools/ab_compare.py`, which alternates the two binaries, discards the
 first pair, and reports a bootstrap interval on the paired difference.
 
 | what | figure | conditions |
 |---|---|---|
-| leaf digest, C | 79.4 ns | 140 B prefix, 4 B tail, 50 B digest, median of 9 × 400k |
-| leaf digest, Rust | 74.8 ns | same shape |
+| leaf digest, C | 78.6 ns | 140 B prefix, 4 B tail, 50 B digest, median of 9 × 400k |
+| libsodium reference, leaf | **282 ns at 1.0.21**, 185 ns at 1.0.22 | the standard oracle is 1.0.21; the versions differ by 1.5x on this shape, so any ratio must name which |
+| leaf digest, Rust | 74.4 ns | same shape |
+| NEON instruction latency | `add.2d` 0.98, `tbl` 0.79, `shl+sri` (rot63) 1.25, `ext` 0.57, scalar `ror` 0.27 ns | `make bench-isa`; serial chains, so latency not throughput |
 | C versus Rust | −4.95 ns, 95% CI [−5.20, −4.65] | 20 alternating pairs |
 | dropping `f[2]`, leaf | −0.43 ns, CI [−0.86, −0.05] | 24 pairs |
 | dropping `f[2]`, state copy | −0.13 ns, CI [−0.14, −0.10] | 24 pairs |

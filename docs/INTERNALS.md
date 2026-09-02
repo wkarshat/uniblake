@@ -1004,15 +1004,11 @@ than on how often it is called:
 tree field. Every one of them sets only what a four-field builder would cover.
 Frequency of use argues nothing about whether an interface is right.
 
-So the resolution is to make the common case not need it, without removing it:
-
-- add `ub_init_personal(S, outlen, personal)`, matching `_init_salt_personal`'s
-  role for the one parameter every observed caller sets;
-- keep `ub_init_param` as the documented escape hatch for the two cases above;
-- stop presenting it as the ordinary path in the guide and the README.
-
-That is additive: no existing caller breaks, and the two libraries end up
-offering the same four-field common path. Tracked in `TODO.md`.
+Both surfaces are therefore kept as they stand: C exposes the twelve the
+reference defines, Rust the four its builder sets. The asymmetry is real but
+neither side is wrong, and closing it would break a public interface to buy
+symmetry that nothing currently needs. `TODO.md` records the decision and what
+would justify reopening it.
 
 **The guarantee to test.** Equal `sizeof` between the two libraries' parameter
 types proves nothing — the structs are never reinterpreted as bytes, since

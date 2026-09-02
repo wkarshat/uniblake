@@ -112,10 +112,25 @@ size_t ub_state_align(void);
 /* --- streaming (RFC 7693 §3.3) --- */
 int ub_init      (ub_state *S, size_t outlen);
 int ub_init_key  (ub_state *S, size_t outlen, const void *key, size_t keylen);
+/* Digest length plus a 16-byte personalization tag, or NULL for none. The
+ * common shape: equivalent to ub_param_init, writing P.personal, and
+ * ub_init_param, without the caller assembling a parameter block. */
+int ub_init_personal(ub_state *S, size_t outlen,
+                     const uint8_t personal[UB_PERSONALBYTES]);
 int ub_init_param(ub_state *S, const ub_param *P);
 int ub_update    (ub_state *S, const void *in, size_t inlen);
 int ub_final     (ub_state *S, void *out, size_t outcap);
 int ub_copy      (ub_state *dst, const ub_state *src);
+
+#if UB_WIPE
+/* Whether ub_final clears this state's secret material. On for a state built
+ * by ub_init_key, off otherwise; this overrides either way.
+ *
+ * Configuration, not a per-digest control: set it before the state is shared,
+ * and ub_copy carries it to every copy. Returns UB_E_STATE after ub_final.
+ * Absent entirely when the library is built with -DUB_WIPE=0. */
+int ub_set_wipe(ub_state *S, int on);
+#endif
 
 /* --- error reporting ---
  *

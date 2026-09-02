@@ -113,6 +113,12 @@ probe:
 .PHONY: probe
 
 # Prototype backends (see backends/README.md). Not part of `all`.
+# Per-instruction latency for the operations G needs. Explains a vector
+# kernel's ceiling in terms of the instruction set rather than the code.
+bench-isa: | $(BUILD)
+	$(CC) $(CFLAGS) $(INC) bench/bench_isa.c -o $(BUILD)/ub_isa$(EXE)
+	$(BUILD)/ub_isa$(EXE)
+
 bench-phases: | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) bench/bench_phases.c $(SRC) -o $(BUILD)/ub_phases$(EXE)
 	$(BUILD)/ub_phases$(EXE)

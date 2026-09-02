@@ -288,6 +288,91 @@ int main(void){
                                         "unkeyed state rejects a second final");
     ub_aligned_free(K); ub_aligned_free(C); ub_aligned_free(U); }
 
+  /* --- ub_init_personal --- */
+  { uint8_t pers[UB_PERSONALBYTES];
+    for (int i=0;i<UB_PERSONALBYTES;i++) pers[i]=(uint8_t)(i+1);
+    uint8_t msg[77]; for(int i=0;i<77;i++) msg[i]=(uint8_t)(i*3+1);
+    uint8_t a[40], b[40];
+
+    /* Must equal the long spelling it replaces, byte for byte. */
+    ub_state *A=ub_aligned_alloc(ub_state_align(),ub_state_size());
+    ub_state *B=ub_aligned_alloc(ub_state_align(),ub_state_size());
+    ok(ub_init_personal(A,40,pers)==UB_OK, "init_personal accepts a tag");
+    ub_param P; ub_param_init(&P,40); memcpy(P.personal,pers,UB_PERSONALBYTES);
+    ok(ub_init_param(B,&P)==UB_OK,        "init_param accepts the same block");
+    ub_update(A,msg,sizeof msg); ub_update(B,msg,sizeof msg);
+    ub_final(A,a,sizeof a);      ub_final(B,b,sizeof b);
+    ok(memcmp(a,b,sizeof a)==0,  "init_personal == param_init + personal + init_param");
+
+    /* NULL tag must equal plain ub_init, not a zero-tag digest by accident. */
+    ub_state *C2=ub_aligned_alloc(ub_state_align(),ub_state_size());
+    ub_state *D=ub_aligned_alloc(ub_state_align(),ub_state_size());
+    ok(ub_init_personal(C2,40,NULL)==UB_OK, "init_personal accepts NULL");
+    ok(ub_init(D,40)==UB_OK,                "init for comparison");
+    ub_update(C2,msg,sizeof msg); ub_update(D,msg,sizeof msg);
+    ub_final(C2,a,sizeof a);      ub_final(D,b,sizeof b);
+    ok(memcmp(a,b,sizeof a)==0,  "init_personal(NULL) == ub_init");
+
+    /* A different tag must change the digest -- proves the tag is absorbed. */
+    ub_state *E=ub_aligned_alloc(ub_state_align(),ub_state_size());
+    pers[0]^=0xff;
+    ub_init_personal(E,40,pers); ub_update(E,msg,sizeof msg);
+    ub_final(E,b,sizeof b);
+    ok(memcmp(a,b,sizeof a)!=0,  "a different tag gives a different digest");
+
+    ok(ub_init_personal(NULL,40,pers)==UB_E_ARG,  "init_personal rejects NULL state");
+    ok(ub_init_personal(A,0,pers)==UB_E_ARG,      "init_personal rejects outlen 0");
+    ok(ub_init_personal(A,65,pers)==UB_E_ARG,     "init_personal rejects outlen 65");
+    ub_aligned_free(A); ub_aligned_free(B); ub_aligned_free(C2);
+    ub_aligned_free(D); ub_aligned_free(E); }
+
+#if UB_WIPE
+  /* --- ub_set_wipe --- */
+  { uint8_t dg[32];
+    ub_state *W=ub_aligned_alloc(ub_state_align(),ub_state_size());
+
+    /* Unkeyed defaults to off; asking for it on makes ub_final wipe. */
+    ok(ub_init(W,32)==UB_OK,            "init for wipe test");
+    ok(ub_set_wipe(W,1)==UB_OK,         "set_wipe(1) accepted before final");
+    ub_update(W,"abc",3);
+    ok(ub_final(W,dg,sizeof dg)==UB_OK, "final with wipe requested");
+    { const unsigned char *p=(const unsigned char*)W;
+      int clear=1; for(size_t i=0;i<64;i++) if(p[i]) clear=0;
+      ok(clear, "unkeyed state wipes when asked"); }
+
+    /* Keyed defaults to on; declining it leaves the state readable. */
+    ub_state *K2=ub_aligned_alloc(ub_state_align(),ub_state_size());
+    ok(ub_init_key(K2,32,"key",3)==UB_OK, "keyed init for wipe test");
+    ok(ub_set_wipe(K2,0)==UB_OK,          "set_wipe(0) declines the default");
+    ub_update(K2,"abc",3);
+    ub_final(K2,dg,sizeof dg);
+    { const unsigned char *p=(const unsigned char*)K2;
+      int clear=1; for(size_t i=0;i<64;i++) if(p[i]) clear=0;
+      ok(!clear, "keyed state does not wipe when declined"); }
+
+    /* The setting must not change the digest, only what is left behind. */
+    uint8_t x[32], y[32];
+    ub_state *P1=ub_aligned_alloc(ub_state_align(),ub_state_size());
+    ub_state *P2=ub_aligned_alloc(ub_state_align(),ub_state_size());
+    ub_init(P1,32); ub_set_wipe(P1,1); ub_update(P1,"abc",3); ub_final(P1,x,sizeof x);
+    ub_init(P2,32); ub_set_wipe(P2,0); ub_update(P2,"abc",3); ub_final(P2,y,sizeof y);
+    ok(memcmp(x,y,sizeof x)==0, "wipe setting does not change the digest");
+
+    /* Carried by ub_copy, so a shared prefix state configures every clone. */
+    ub_state *S1=ub_aligned_alloc(ub_state_align(),ub_state_size());
+    ub_state *S2=ub_aligned_alloc(ub_state_align(),ub_state_size());
+    ub_init(S1,32); ub_set_wipe(S1,1); ub_update(S1,"pre",3);
+    ub_copy(S2,S1); ub_update(S2,"x",1); ub_final(S2,dg,sizeof dg);
+    { const unsigned char *p=(const unsigned char*)S2;
+      int clear=1; for(size_t i=0;i<64;i++) if(p[i]) clear=0;
+      ok(clear, "ub_copy carries the wipe setting"); }
+
+    ok(ub_set_wipe(NULL,1)==UB_E_ARG,   "set_wipe rejects NULL state");
+    ok(ub_set_wipe(P1,1)==UB_E_STATE,   "set_wipe rejects a finalized state");
+    ub_aligned_free(W); ub_aligned_free(K2); ub_aligned_free(P1);
+    ub_aligned_free(P2); ub_aligned_free(S1); ub_aligned_free(S2); }
+#endif
+
   printf("api: checks=%d fails=%d -> %s\n",checks,fails,fails?"FAIL":"PASS");
   ub_aligned_free(S);
   free(big);

@@ -112,6 +112,67 @@ message is gathered.
 ## NEON is slower than scalar here
 
 Both NEON kernels are correct and both lose to the scalar compression on an
+Apple M4 Pro. Six formulations were tried; the fastest is the shipped one. The
+question worth answering is not "which formulation" but **what the ceiling
+is**, because that is what transfers to other cores and other projects.
+
+### Where the time goes, measured per instruction
+
+Serial-dependency micro-benchmarks on this core, one operation per iteration
+so the number is latency rather than throughput:
+
+| operation | ns | cycles @4.4GHz | role in BLAKE2b |
+|---|--:|--:|---|
+| `add.2d` | 0.96 | 4.2 | two of the four steps in every G |
+| `tbl.16b` | 0.78 | 3.4 | rot24 and rot16 |
+| `shl`+`sri` | 1.26 | 5.5 | **rot63 — no single-instruction form** |
+| `ext.16b` | 0.55 | 2.4 | diagonalisation between round halves |
+| scalar `ror` | 0.27 | 1.2 | the same rotate, scalar |
+
+The last row is the finding: **a scalar rotate is 4.6x cheaper than the NEON
+rot63 it replaces.** BLAKE2b needs one rot63 per G, on the critical path, and
+NEON has no 64-bit rotate instruction at all -- it must be synthesised as a
+shift pair. That is not a property of this kernel; it is a property of the
+instruction set meeting this algorithm.
+
+### Why 2-wide SIMD cannot win here
+
+Counting operations, NEON should halve the work: 12 rounds x 8 G becomes 12 x
+4 vector G-groups. Counting *dependencies*, it changes nothing. G is a serial
+chain a -> d -> c -> b, eight dependent steps; per round the four column G are
+mutually independent and then the four diagonal G are. The critical path is
+therefore 16 dependent steps per round, 192 over twelve rounds -- **identical
+for scalar and for 2-wide SIMD**, because pairing two lanes of the *same*
+message does not shorten the chain.
+
+So SIMD halves the instruction count on a core that was never issue-limited,
+while lengthening every step on the chain. A wide out-of-order core running
+scalar code already overlaps the independent G calls; the vector path pays
+more latency per step to remove parallelism the machine was extracting anyway.
+
+Summing the measured latencies over the chain predicts ~190 ns against a
+measured 136, so the core does overlap more than the pure-chain model assumes
+-- but the direction and the cause are clear, and no rearrangement of a
+single-message kernel changes them.
+
+### What would change the answer
+
+**Two independent messages per register, not two halves of one.** That is the
+one formulation not yet tried, and it is the only one where the lane width
+buys real parallelism: two separate BLAKE2b chains have no dependency between
+them, so the 2x lane width converts directly into 2x throughput and the
+critical path stops mattering. It is the same technique the x86 kernels use at
+4 lanes.
+
+Expected ceiling on this core: below 2x, since the rot63 penalty is paid per
+lane-group regardless. That is worth measuring before assuming, and it is the
+direction any future NEON work should take. A single-message NEON kernel is a
+dead end on this class of core and the numbers above say why.
+
+### The kernels as they stand
+
+
+Both NEON kernels are correct and both lose to the scalar compression on an
 Apple M4 Pro:
 
 | kernel | ns/digest |

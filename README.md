@@ -84,8 +84,29 @@ block at the end of this section.
 
 `SODIUM` points at libsodium, which `make check` and `make bench` use as an
 independent reference. The library itself links nothing and needs only a C99
-compiler. Prefer the libsodium the consuming project already uses, so
-conformance is measured against the implementation being replaced.
+compiler.
+
+**libsodium is a test oracle, not a dependency.** The library links nothing
+and contains no libsodium code. Nothing in `src/` or `include/` is copied,
+adapted, or derived from it, and no part of its documentation is a source for
+this one. It is compiled into the test binaries only, so that every digest can
+be checked against an independent implementation; a build of the library
+itself neither needs nor references it. The optional `compat/ub_sodium.h`
+maps libsodium's *function names* onto uniblake calls for callers migrating,
+which is an adapter over this library's own code, not a use of theirs.
+
+The implementation follows RFC 7693 and the BLAKE2 authors' reference package.
+Where a constant is shared with other implementations -- the SIGMA schedule,
+the IV, the rotation amounts -- it is shared because the specification fixes
+it, not because it was taken from anyone.
+
+**The reference version is libsodium 1.0.21.** That is what the consuming
+project builds and links, on Linux and macOS alike, so conformance is measured
+against the implementation actually being replaced rather than against
+whatever a package manager happens to offer. The consuming build compiles it
+from source with a pinned upstream tarball and SHA-256, `--enable-static
+--disable-shared`; a distribution package is not the same artefact. Any other
+version is a convenience, and a result from one should say so.
 
 The rest of the validation, same on every platform:
 

@@ -44,8 +44,11 @@ struct ub_state {
    * 16-byte f[2] the reference layout carries. */
   uint8_t  fin;
 #if UB_WIPE
-  uint8_t  keyed;                /* set by ub_init_key; selects wiping in
-                                  * ub_final */
+  /* Whether ub_final clears secret material before returning. ub_init_key
+   * sets it, so a keyed caller gets wiping without asking; ub_set_wipe
+   * overrides it in either direction. Named for what it controls rather than
+   * for what usually sets it. */
+  uint8_t  wipe;
 #endif
 };
 

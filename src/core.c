@@ -92,6 +92,16 @@ int ub_init(ub_state *S, size_t outlen) {
   return ub_init_param(S, &P);
 }
 
+/* Digest length and personalization, the shape every observed caller uses.
+ * Equivalent to ub_param_init + writing P.personal + ub_init_param, which is
+ * what a caller must spell out today. `personal` may be NULL for none. */
+int ub_init_personal(ub_state *S, size_t outlen,
+                     const uint8_t personal[UB_PERSONALBYTES]) {
+  ub_param P; ub_param_init(&P, outlen);
+  if (personal) memcpy(P.personal, personal, UB_PERSONALBYTES);
+  return ub_init_param(S, &P);
+}
+
 int ub_init_key(ub_state *S, size_t outlen, const void *key, size_t keylen) {
   if (keylen == 0) return ub_init(S, outlen);
   if (!key) return ub_err(UB_E_ARG, __func__, "NULL key with nonzero keylen");
@@ -101,7 +111,9 @@ int ub_init_key(ub_state *S, size_t outlen, const void *key, size_t keylen) {
   int rc = ub_init_param(S, &P);
   if (rc != UB_OK) return rc;
 #if UB_WIPE
-  S->keyed = 1;   /* ub_init_param zeroed the state, so set this after it */
+  S->wipe = 1;    /* ub_init_param zeroed the state, so set this after it.
+                   * A keyed caller gets wiping without asking; ub_set_wipe
+                   * can decline it. */
 #endif
   /* The key is absorbed as one zero-padded block (RFC 7693 §3.3). */
   uint8_t blk[UB_BLOCKBYTES];
@@ -183,10 +195,33 @@ int ub_final(ub_state *S, void *out, size_t outcap) {
    * the whole struct would clear `fin` and silently re-enable it. `d` holds all
    * 64 bytes even when outlen is shorter, so it is cleared too. */
 #if UB_WIPE
-  if (S->keyed) wipe_secrets(S, d);
+  if (S->wipe) wipe_secrets(S, d);
 #endif
   return UB_OK;
 }
+
+#if UB_WIPE
+/* Whether this state clears secret material in ub_final.
+ *
+ * Default: on for a state built by ub_init_key, off otherwise -- a keyed
+ * caller should not have to know to ask, and an unkeyed one should not pay
+ * for what it has no secret to protect.
+ *
+ * This is configuration, not a per-digest control. The flag is read once per
+ * ub_final, so a batch loop that leaves it alone keeps that branch perfectly
+ * predicted; toggling it between digests puts a data-dependent branch on the
+ * hot path. Set it before the state is shared, and ub_copy carries it to
+ * every copy.
+ *
+ * Rejected after finalization, so the setting cannot appear to change what a
+ * completed digest already did. */
+int ub_set_wipe(ub_state *S, int on) {
+  if (!S) return ub_err(UB_E_ARG, __func__, "NULL state");
+  if (finalized(S)) return ub_err(UB_E_STATE, __func__, "state already finalized");
+  S->wipe = on ? 1 : 0;
+  return UB_OK;
+}
+#endif
 
 int ub_copy(ub_state *dst, const ub_state *src) {
   if (!dst || !src) return ub_err(UB_E_ARG, __func__, "NULL source or destination");
