@@ -73,6 +73,31 @@ harnesses, and a Linux aarch64 run to separate "this instruction set" from
 "this core". The harnesses are portable C and Rust and need no porting; only
 the assembly counter needs x86 patterns.
 
+**The oracle's build flags matter more than its version.** Two libsodium
+builds on this machine measure 282 ns and 193 ns on the leaf shape. That is
+**not** a version difference: nothing between 1.0.21 and 1.0.22 touches
+BLAKE2b (1.0.22 adds ML-KEM768, X-Wing and SHA-3). It is the optimisation
+level. The consuming project's dependency system builds everything at `-O1`;
+a package manager builds at `-O2`.
+
+Proved by compiling libsodium's own `blake2b-compress-ref.c` both ways:
+**2263 instructions at `-O1` against 1550 at `-O2`**, a 1.46x ratio matching
+the 282/193 = 1.46x timing.
+
+Consequences for any comparison figure:
+
+- State the oracle's **build flags**, not only its version. "libsodium 1.0.21"
+  is ambiguous by 46%.
+- A figure against a distribution package (Ubuntu 24.04 ships 1.0.18, 18.04
+  ships 1.0.16, both `-O2`) is not comparable to one against the consuming
+  project's `-O1` build, and neither is wrong -- they answer different
+  questions.
+- The honest headline is a `-O2` comparison, since that is how a library is
+  normally built. The `-O1` figure answers a narrower question: what the
+  consuming node actually experiences today.
+
+README's Ubuntu section carries the source-build recipe with the pinned hash.
+
 ## Decisions recorded
 
 **Parameter surfaces: keep as they are, revisit later.** C keeps `ub_param`

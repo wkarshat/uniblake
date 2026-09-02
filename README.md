@@ -74,7 +74,11 @@ header, and counter width. The remainder are sequential-mode defaults.
 Pick your platform, run the two commands, and see the "what a pass looks like"
 block at the end of this section.
 
-| platform | build | test |
+The table is the quick path, using whatever libsodium is already installed.
+That is enough to prove conformance; for a *comparison figure* worth
+publishing, use the reference oracle -- see the Ubuntu section below.
+
+| platform | build | quick test |
 |---|---|---|
 | macOS | `make` | `make check SODIUM=$(brew --prefix libsodium)` |
 | Ubuntu 24.04 | `make` | `make check SODIUM=/usr` |
@@ -145,6 +149,8 @@ column tests nothing new.
 
 #### Ubuntu 24.04 and 18.04
 
+Quick check, using whatever libsodium the distribution provides:
+
 ```
 sudo apt install build-essential libsodium-dev clang
 make
@@ -156,6 +162,65 @@ make check-sanitize SODIUM=/usr
 `/usr` is where the distribution package lands; a source build defaults to
 `/usr/local`. On 18.04 the system GCC is older, which is the point of testing
 there: it catches reliance on newer compiler behaviour.
+
+**Which libsodium you link changes the comparison, and the build flags change
+it more than the version does.** Conformance is unaffected -- a digest is a
+digest, and every version agrees -- but the *comparison* rows in `make bench`
+are against whatever was linked. Two builds of the same algorithm measured
+282 ns and 193 ns here, a 46% spread, and the cause was `-O1` against `-O2`,
+not the version: nothing between 1.0.21 and 1.0.22 changes BLAKE2b.
+
+So state the oracle's version **and** how it was built with any published
+figure. Ubuntu 24.04 packages 1.0.18 and 18.04 packages 1.0.16, both at the
+distribution's own flags. To measure against the reference version:
+
+```
+curl -LO https://github.com/jedisct1/libsodium/releases/download/1.0.21-RELEASE/libsodium-1.0.21.tar.gz
+echo "9e4285c7a419e82dedb0be63a72eea357d6943bc3e28e6735bf600dd4883feaf  libsodium-1.0.21.tar.gz" | sha256sum -c
+tar xf libsodium-1.0.21.tar.gz && cd libsodium-1.0.21
+./configure --prefix=$HOME/opt/libsodium-1.0.21 --enable-static --disable-shared
+make -j"$(nproc)" && make install && cd ..
+
+make check SODIUM=$HOME/opt/libsodium-1.0.21
+make bench  SODIUM=$HOME/opt/libsodium-1.0.21
+```
+
+Always state which libsodium a published figure used.
+
+#### Linux performance and kernel analysis
+
+The same targets as on macOS, all portable C:
+
+```
+make bench-phases                                   # where a leaf digest's time goes
+make bench-compare SODIUM=$HOME/opt/libsodium-1.0.21
+make bench-isa                                      # per-instruction latency
+make kernel-stats                                   # what the compiled kernel does
+make kernel-stats-arch                              # how to read those counts on x86
+```
+
+`kernel-stats` currently parses aarch64 only; `kernel-stats-arch` prints what
+has to change for x86-64 and why the counts mean different things there. The
+benchmarks need no porting.
+
+On x86-64 also run the vector kernel, which cannot be measured on an
+Apple-silicon host:
+
+```
+make check-avx2 SODIUM=$HOME/opt/libsodium-1.0.21
+make bench-avx2 SODIUM=$HOME/opt/libsodium-1.0.21
+```
+
+For the Rust crate on Ubuntu 24.04, whose `rustc` is 1.75 -- the toolchain
+this project targets:
+
+```
+sudo apt install rustc cargo
+cd ../uniblake-rs && cargo test && cargo run --release --example compare
+```
+
+`docs/INTERNALS.md`, *Running this work on x86-64*, lists what is expected to
+measure differently there and why.
 
 #### Windows 11 with WSL
 
