@@ -81,8 +81,18 @@ level. The consuming project's dependency system builds everything at `-O1`;
 a package manager builds at `-O2`.
 
 Proved by compiling libsodium's own `blake2b-compress-ref.c` both ways:
-**2263 instructions at `-O1` against 1550 at `-O2`**, a 1.46x ratio matching
-the 282/193 = 1.46x timing.
+**2263 instructions at `-O1` against 1550 at `-O2`**, matching the timing
+ratio. Three builds of 1.0.21 from identical source, leaf shape:
+
+| flags | ns/digest |
+|---|--:|
+| `-pipe -O1` (the consuming project's dependency system) | 288 |
+| `-pipe -O2` | 178 |
+| libsodium's own configure default (`-O3` + hardening) | 175 |
+
+Note the default is **`-O3`**, not `-O2`: libsodium picks its own optimisation
+and hardening flags unless `CFLAGS` is passed explicitly. `-O2` to `-O3` buys
+almost nothing here; the whole effect is escaping `-O1`.
 
 Consequences for any comparison figure:
 
@@ -206,10 +216,65 @@ point at the others:
    file, which is where unshipped work lives.
 6. `TODO.md` — state, and every figure.
 
-**Rules to apply while doing it:** no restating what an adjacent paragraph
-already said; no aphorisms; no "as we saw above"; cross-file pointers only
-from `README`; a heading earns its place by answering a question a reader
-actually has.
+**Rules to apply while doing it.** The two standing complaints, both of which
+the current documents fail:
+
+**Cut the volume.** The writing is too long. Say the thing once, in as few
+words as carry it, and stop. No restating what an adjacent paragraph already
+said, no aphorisms, no "as we saw above", no sentence whose job is to
+introduce the next one. A heading earns its place by answering a question a
+reader actually has. Prefer a table to a paragraph and a sentence to a table
+when the sentence is enough. Cross-file pointers only from `README`.
+
+**Get the numbers out of the prose.** Measurements change with the machine,
+the compiler, the oracle build and the tree state; a figure written into a
+paragraph is stale the next time anything moves, and nothing signals it.
+`TODO.md` owns every figure, with its conditions, and is pruned each pass.
+The permanent documents state mechanisms, which do not rot. Where a document
+must refer to a measurement, name the direction and the target that
+reproduces it -- "measurably slower, see `make ab`" -- not the digits.
+
+This applies to explanatory text as much as to reference tables: a paragraph
+carrying three timings and a confidence interval is the failure mode, not a
+thorough job.
+
+**Specific: promote the libsodium oracle to its own section in `README`.**
+The oracle material is currently split between the top of *Build and test*
+("libsodium is a test oracle, not a dependency") and the middle of
+*#### Ubuntu 24.04 and 18.04* (which version, why build flags matter more than
+the version, the 288/178/175 measurement table, and the source-build recipe).
+None of that is Ubuntu-specific; it applies on macOS and Windows equally. Three
+problems follow from where it sits:
+
+- The platform table says "see the Ubuntu section below" for oracle guidance,
+  which sends a reader to a distro section for something distro-independent.
+- The two halves of one topic are eighty lines apart.
+- Nothing states that the source-build recipe is a **prerequisite** rather than
+  an alternative: `$HOME/opt/libsodium-1.0.21` does not exist until it is
+  built, and running a `bench` target against it first fails. (The Makefile
+  error now explains this; the README still should.)
+- The recipe does not say **which directory each command runs in**. The
+  download, configure and install happen in a scratch directory; `make check`
+  and `make bench` are uniblake targets and must run in the uniblake checkout.
+  The trailing `cd ..` returns to wherever the download started, not there, so
+  a reader following the block in order lands in libsodium's tree and gets
+  "No rule to make target 'bench'". Show the `cd` back explicitly, or split
+  the block in two with a heading on each.
+
+Proposed shape -- a peer subsection placed **after** the per-platform ones, so
+platform setup still comes first:
+
+    #### The libsodium oracle
+        what it is and is not (moved from the top of Build and test)
+        which version, and why
+        build flags matter more than the version (the measurement table)
+        building the reference version (recipe, with the prerequisite stated)
+
+Each platform subsection keeps only its one-line quick command, which is the
+part that genuinely differs by platform. The table caption changes to name the
+new section instead of pointing at Ubuntu. Net effect: `README` gets shorter,
+the Ubuntu section is about Ubuntu again, and there is one place to look for
+"which libsodium am I measuring against".
 
 ### Visual material
 
@@ -314,6 +379,45 @@ inline figures did.
   freeze that crate's `&mut Self` builder convention into this API permanently
   to save a handful of one-line edits.
 
+## Figures — x86-64 Linux, VM
+
+First x86-64 run. Ubuntu VM, libsodium 1.0.21 from a `$HOME/opt` source build.
+CPU model not captured; a VM, so absolute figures carry hypervisor overhead
+and the drift within a run is larger than on bare metal.
+
+| | ns/digest |
+|---|--:|
+| scalar leaf | 184 |
+| AVX2 leaf | 151 |
+| libsodium leaf | 246-270 across rows in one run |
+| 2 threads, n=100k/400k | ~95-100 |
+| 2 threads, n=10k | 199 — slower than 1 thread, thread setup dominates |
+
+| bulk | MB/s |
+|---|--:|
+| uniblake scalar | 784-826 |
+| libsodium | 1104-1158 |
+
+Leaf phases: state copy 6.90, `update(4B)` +15.54, `ub_final` +164.01;
+`ub_compress` alone 158.62.
+
+Open from this run:
+
+- **AVX2 gain is 1.22x**, against 1.6x in the older Skylake row. Our scalar
+  path is also faster there (184 vs 219), so there may be less to recover --
+  unconfirmed.
+- **libsodium is 1.4x faster on bulk**, consistently. It ships x86 SIMD
+  compress kernels and we run scalar there; `bench-compare-avx2` would say
+  whether our vector build closes it. Not yet run.
+- **State copy 6.90 ns and `update(4B)` 15.54 ns** are 2.4x and 5.4x the
+  aarch64 figures, worse than the compression ratio. Suspect memory or VM
+  rather than codegen. Needs `lscpu` and a bare-metal comparison.
+- **CPU model and `bench-isa` not captured.** `bench-isa` is what decides the
+  last-round rotate question on x86.
+
+Use `make collect SODIUM=<prefix>` for the next run; it captures all of the
+above plus the machine and oracle details in one file.
+
 ## Figures
 
 Every measured number, with the conditions. Apple M4 Pro, clang -O2,
@@ -327,7 +431,7 @@ first pair, and reports a bootstrap interval on the paired difference.
 | what | figure | conditions |
 |---|---|---|
 | leaf digest, C | 78.6 ns | 140 B prefix, 4 B tail, 50 B digest, median of 9 × 400k |
-| libsodium reference, leaf | **282 ns at 1.0.21**, 185 ns at 1.0.22 | the standard oracle is 1.0.21; the versions differ by 1.5x on this shape, so any ratio must name which |
+| libsodium reference, leaf | 1.0.21: **288 ns `-O1`**, 178 `-O2`, 175 configure-default `-O3` | the spread is optimisation level, not version; no BLAKE2b change between 1.0.21 and 1.0.22 |
 | leaf digest, Rust | 74.4 ns | same shape |
 | NEON instruction latency | `add.2d` 0.98, `tbl` 0.79, `shl+sri` (rot63) 1.25, `ext` 0.57, scalar `ror` 0.27 ns | `make bench-isa`; serial chains, so latency not throughput |
 | C versus Rust | −4.95 ns, 95% CI [−5.20, −4.65] | 20 alternating pairs |

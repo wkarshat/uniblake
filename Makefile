@@ -45,7 +45,11 @@ SODLIB   = -L$(SODIUM)/lib -lsodium
 sodium-check:
 	@test -f "$(SODIUM)/include/sodium.h" || { \
 	  echo "libsodium not found under $(SODIUM)"; \
-	  echo "  set SODIUM=<prefix>, e.g. make check SODIUM=/usr"; \
+	  echo "  no include/sodium.h there. Either the prefix is wrong, or it is"; \
+	  echo "  a source build that has not been built yet -- building it is a"; \
+	  echo "  separate step, see README, 'Ubuntu 24.04 and 18.04'."; \
+	  echo "  Installed prefix:  make $@ SODIUM=/usr        (or /usr/local)"; \
+	  echo "  No oracle needed:  make bench-phases, make bench-isa"; \
 	  exit 1; }
 	@printf 'oracle: libsodium %s at %s\n' \
 	  "$$(sed -n 's/.*SODIUM_VERSION_STRING "\(.*\)".*/\1/p' $(SODIUM)/include/sodium/version.h)" \
@@ -146,6 +150,19 @@ bench-compare: sodium-check | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) $(SODINC) bench/bench_compare.c $(SRC) \
 	  $(SODLIB) -lpthread -o $(BUILD)/ub_cmp$(EXE)
 	$(BUILD)/ub_cmp$(EXE)
+
+# bench-compare with the AVX2 kernel instead of scalar. Gives the bulk row
+# the leaf-only bench-avx2 does not.
+# Every benchmark and analysis target in one run, with machine, compiler,
+# oracle version and tree state captured alongside. Redirect to a file.
+collect:
+	@sh tools/collect.sh "$(SODIUM)"
+
+bench-compare-avx2: avx2-check sodium-check | $(BUILD)
+	$(CC) $(CFLAGS) $(AVX2FLAGS) $(INC) $(SODINC) bench/bench_compare.c \
+	  src/core.c src/const.c src/prefix.c backends/compress_avx2.c \
+	  $(SODLIB) -lpthread -o $(BUILD)/ub_cmp_avx2$(EXE)
+	$(BUILD)/ub_cmp_avx2$(EXE)
 
 bench-neon: | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) $(SODINC) bench/bench_prefix.c \

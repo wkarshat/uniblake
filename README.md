@@ -185,7 +185,24 @@ make check SODIUM=$HOME/opt/libsodium-1.0.21
 make bench  SODIUM=$HOME/opt/libsodium-1.0.21
 ```
 
-Always state which libsodium a published figure used.
+That `./configure` sets **`-O3`** plus its own hardening flags; libsodium chooses
+them, not this project, and it is what an ordinary source build gives. To
+reproduce a different build instead, pass `CFLAGS` explicitly -- for example
+`CFLAGS="-pipe -O1"` to match a consumer whose dependency system standardises
+on `-O1`.
+
+Measured on one machine, libsodium 1.0.21 from identical source, leaf shape:
+
+| build | ns/digest |
+|---|--:|
+| `CFLAGS="-pipe -O1"` | 288 |
+| `CFLAGS="-pipe -O2"` | 178 |
+| configure default (`-O3` + hardening) | 175 |
+
+**A published figure must state the oracle's version and its build flags.**
+The version alone is ambiguous by 64% on this shape, and the optimisation
+level accounts for nearly all of it -- there is no BLAKE2b change between
+1.0.21 and 1.0.22.
 
 #### Linux performance and kernel analysis
 
