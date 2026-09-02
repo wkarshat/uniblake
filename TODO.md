@@ -13,10 +13,15 @@ answered first.
 
 ### 1. C API completion — decided, no dependencies
 
-`ub_init_personal` and `ub_set_wipe` are in. Nothing else in this line is
-blocked. What remains is presentational: the guide and README still show
-`ub_param` assembly as the ordinary path for setting a personalization tag,
-which is now the long way round.
+`ub_init_personal` and `ub_set_wipe` are in. What remains is presentational:
+the guide and README still show `ub_param` assembly as the ordinary path for
+setting a personalization tag, which is now the long way round.
+
+Also added since: `check-build` compiles a suite without running it, and
+`check-wine` runs a cross-built Windows binary. The pair exists because
+`check-alias` builds and runs, so a cross build reported a failure that was
+only the host refusing to execute a foreign binary. Windows conformance is now
+verifiable from Linux without a Windows machine.
 
 ### 2. Rust API correctness — decided, blocks line 3
 
@@ -65,6 +70,16 @@ Parameter *surfaces* stay as they are -- see the decision below.
 - **x86-64 scalar last-round deferral: open.** Free on aarch64 because the
   compiler fuses it into the output XOR; x86 has no such encoding, so the four
   rotates are real instructions there.
+
+### 7. Consumer integration — largely done, blocked on transfer
+
+The proof-of-work code of a consuming node now hashes through this library:
+per-digest state copy removed, optimised solver ported, batch path present
+behind a default-off flag, depends package building from a local checkout.
+Full node build and C++ suite pass.
+
+Blocked on: the branch exists on one machine only. Nothing else in this line
+moves until it is transferred.
 
 ### 6. Cross-platform measurement — open, no dependencies
 
@@ -172,204 +187,119 @@ before-and-after pair recorded, not slipped in.
 
 ### Consumer transition to the C library
 
-A consuming node's proof-of-work code uses libsodium's BLAKE2b directly. Its
+A consuming node's proof-of-work code used libsodium's BLAKE2b directly. Its
 inner loop is this library's target shape: a prefix state absorbed once, then
-one digest per consecutive counter. The prefix handling there is already
-correct -- the state is shared, not re-absorbed -- so the gains are elsewhere.
+one digest per consecutive counter.
 
-**Obstacle, common to every option.** The consumer declares hash states by
-value on the stack and copies them by assignment, which works because the
-reference's state is a public fixed-size array. This library's is opaque:
-sized by `ub_state_size()`, copied by `ub_copy()`. Those declarations must
-change regardless of which route is taken. The compatibility shim maps
-function names and deliberately does not paper over this.
+Done, on a branch in the consumer's tree:
 
-**B1 -- replace the per-digest helper with `ub_hash_tail`.** One function
-body; all its call sites are unchanged. Removes the state copy per digest
-rather than shrinking it, and covers the sites whose counters are not
-consecutive. Strictly better than the minimal "shim plus opaque state" route,
-for about one extra function body, so that route is dropped.
+- A wrapper giving this library's opaque state the value semantics the
+  consumer's code already assumed -- stack declaration, copy-assignment.
+- The per-digest helper now calls `ub_hash_tail` against the shared prefix,
+  so the state is not copied per leaf. Measured 1.15x on the per-digest cost
+  at the consumer's real geometry, digests byte-identical.
+- The optimised solver ported the same way. Its counters advance by thread
+  count, so they are not consecutive and the batch entry point does not apply
+  there.
+- A batch path behind a build flag, default off. Operational and
+  byte-identical over half a million digests, and measurably slower: the
+  vector kernels are single-message, so a batch call runs one per digest
+  exactly as a loop does. It is the call shape a multi-message kernel would
+  fill, not a win today.
+- A depends package building uniblake from a local checkout.
 
-**B2 -- replace the two consecutive-counter loops with `ub_hash_n`.**
-Decided: **one call for the whole range**, with the cancellation check once
-around it rather than per digest. The worst-case cancellation latency is the
-time to hash the full list, which measures well under a second and sits inside
-a two-minute block interval. This also removes roughly two million
-`std::function` indirect calls per solve.
+Full node build succeeds, links this library, and passes its C++ suite
+including the genesis validation vectors. One pre-existing failure in the
+consumer's wallet tests, verified present on the parent commit and untouched
+by this work.
 
-Measured at the consumer's exact geometry (140 B prefix, 4-byte counter,
-48-byte output): `ub_hash_n` produces **byte-identical digests** to the loop
-it replaces, and runs **slightly slower** than it on scalar aarch64. So B2
-today is a small cost, not a speedup. **Its payoff is contingent on a
-multi-message vector kernel that does not exist yet**; what it buys now is the
-call shape such a kernel would fill, plus the removed per-digest callbacks.
+Open:
 
-That argues for doing B1 and stopping, unless the vector kernel is actually
-being pursued. B2 without it is churn in consensus code for a negative
-scalar delta.
+- The branch is local to one machine. It needs pushing or transfer before the
+  Linux side can build it.
+- x86-64 measurement. The AVX2 kernel has never been timed on real hardware;
+  everything so far is aarch64 or emulated.
+- Two BLAKE2b call sites remain on libsodium: a serialization writer used on
+  the sync path, and key derivation. The writer is the one that matters --
+  sync is where the consumer's own profiling puts the cost.
 
-Sequencing: B1 first, measured. B2 separately, since its risk and its payoff
-differ. Both touch consensus code -- a digest change is a fork -- so the
-published vectors, the alias suite and the consumer's own solver vectors must
-be green before and after.
+### depends integration: what went wrong twice
 
-### State allocation helpers — to review and decide
+Recorded because both failures were silent and the error message named the
+wrong step. The mechanism and the debugging procedure are in the recipe's own
+header comment, which is where someone hitting this will be looking.
 
-**Proposal:** add `ub_state_new()` and `ub_state_free()` to the public API.
+1. The extract step copied into the extract directory while already inside it,
+   nesting a second copy. The build found no Makefile and produced nothing.
 
-The library reports `ub_state_size()` and `ub_state_align()` and leaves
-allocation to the caller. That is the right default -- a caller with its own
-arena, a pool, or a stack buffer should not be forced through malloc. But it
-means every consumer writes the same aligned allocation, and the C++ ones
-write it twice: once to allocate, once for a destructor.
+2. depends names the compiler `$(HOST)-gcc`. That exists for a cross build and
+   not for a native one -- on Ubuntu `x86_64-pc-linux-gnu-gcc` is absent and
+   `gcc` is what there is. Packages with autotools never notice, because
+   configure probes and falls back. uniblake has no configure step, so it ran
+   a missing compiler, produced nothing, and depends stamped the step as
+   built.
 
-Evidence from the first real consumer. Porting a proof-of-work implementation
-needed a wrapper class whose entire body is an aligned allocate, a free, and
-`ub_copy` for value semantics. Writing it surfaced two things:
+Both surfaced as `cp: cannot stat 'build/libuniblake.a'` at the staging step,
+which is three steps downstream of the actual fault.
 
-- `ub_aligned_alloc` exists in `tests/ub_alloc.h` and is exactly what a
-  consumer wants, but it is test-only and not installed. The consumer
-  reimplemented it, choosing between `aligned_alloc` and `posix_memalign` on
-  the same version conditions the library already resolves internally.
-- The size must be rounded up to a multiple of the alignment for
-  `aligned_alloc` to be legal. `ub_state_size()` already satisfies that, but a
-  consumer cannot know so without reading the source, so it rounds defensively.
-
-Both are the library's knowledge leaking into every caller.
-
-**Against:** it adds two symbols and an allocation policy to a library whose
-current claim is that it allocates nothing and holds no pointer into caller
-storage. That claim is load-bearing -- it is why the state can live in an
-arena or shared memory -- and a `_new`/`_free` pair invites callers to stop
-thinking about it. It also raises the question of what `_free` does with a
-keyed state, which is the wiping question again.
-
-**Middle option:** install `ub_alloc.h` as a documented convenience header,
-so the helper is available without the library itself gaining an allocator.
-Keeps the no-allocation claim exactly true and removes the duplication.
-
-**Not decided.** The middle option looks right, but the naming, whether it
-belongs in the main header, and the keyed-state interaction all want settling
-first.
-
-### API additions, not yet built
-
-Collected from the requirements review; none is implemented. Kept here rather
-than in a permanent document because unshipped design is state, not
-documentation.
-
-- **Rust batch entry point over a shared prefix.** The consumer's solver loop
-  is already this shape: clone a prefix state, append a little-endian counter,
-  finalize, read the digest in fixed-width slices. The reference crate's batch
-  API cannot express it, because its job type starts from the initial state
-  and takes a whole input, so a shared prefix is re-absorbed per digest.
-  Design questions recorded and unresolved: how the tail width is spelled, how
-  output is passed, and what it returns.
-- **Rust fallible constructors.** The builder must not panic on caller input.
-  Follow the shape RustCrypto uses: validate in the public constructor, return
-  `Result`, keep the assert as an internal invariant behind it. Needs a
-  `Params` error enum naming the same conditions the C side names, which is
-  also what any future fallible entry point returns — so design it once.
+The general lesson, now enforced: depends stamps are claims, not evidence. Its
+step dependencies are order-only, so a stamp left by a failed run makes make
+skip the step entirely on the next attempt. Any package without a configure
+step must assert its own output -- `test -f build/libuniblake.a` at the end of
+the build commands -- or a silent failure travels downstream and is diagnosed
+in the wrong place.
 
 ### Documentation refactor
 
-The set has grown to 3,600 lines across six files, two of which are oversized
-because material was appended to them rather than placed. Concrete state, so
-the work is not re-derived:
+Current state, measured:
 
-| file | lines | problem |
-|---|--:|---|
-| `docs/INTERNALS.md` | 1192 | absorbed the C/Rust comparison, the x86 procedure and the parameter analysis; now spans kernel internals, cross-language design and a porting runbook |
-| `docs/INTEGRATING.md` | 122 | **done 2026-09-01**: the 906-line API proposal moved here, leaving the migration guide |
-| `docs/GUIDE.md` | 632 | absorbed the wiping material |
-| `README.md` | 414 | carries scope, build, layout, the document contract and the naming rule |
-| `docs/UniBlake.md` | 215 | the design argument; the least changed |
-| `TODO.md` | 126 | this file |
+| file | lines | owns | audience |
+|---|--:|---|---|
+| `docs/INTERNALS.md` | 1235 | kernel, state, porting, x86 runbook, C/Rust design | someone replacing a kernel |
+| `docs/GUIDE.md` | 632 | calling it, wiping | someone writing calling code |
+| `TODO.md` | 547 | state, backlog, figures | checking status |
+| `README.md` | 536 | what, build, layout, oracle, naming | someone who just arrived |
+| `docs/UniBench.md` | 361 | the measurement format | recording or reading a benchmark |
+| `docs/UniBlake.md` | 215 | why it exists, what it will not do | deciding to adopt |
+| `docs/INTEGRATING.md` | 122 | migrating a consumer | swapping out another BLAKE2b |
 
-Overlaps found by inspection: "state size" is discussed in five of the six;
-`ub_state_size` appears in four; scope boundaries are stated in both `README`
-and `UniBlake.md`.
+Two files are oversized and one is now right. `INTEGRATING.md` came down from
+1028 lines when the unbuilt-API design moved to `TODO.md`, which is the shape
+the rest should follow: a document holds what is true, `TODO.md` holds what is
+proposed.
 
-**Target shape.** Each file gets one audience, one question, and a place in a
-stated reading order — defined in `README`, which is the only file allowed to
-point at the others:
+Remaining moves, in order of how much they help:
 
-1. `README` — what this is, how to build it, where things are. Audience:
-   someone who just arrived. Should shrink: the naming rule and the document
-   contract are policy, not orientation.
-2. `UniBlake.md` — why it exists and what it will not do. Audience: someone
-   deciding whether to adopt it. Absorbs the scope statements now duplicated
-   in `README`.
-3. `GUIDE.md` — how to call it. Audience: someone writing calling code.
-   Wiping belongs here; internals do not.
-4. `INTERNALS.md` — how it works and how to port it. Audience: someone
-   replacing a kernel. **Split candidate:** the x86 runbook and the
-   cross-language design are separate questions from the kernel, and are what
-   pushed this past a thousand lines.
-5. `INTEGRATING.md` — how to migrate an existing consumer. Audience: someone
-   swapping out another BLAKE2b. Done: the unbuilt-API design moved to this
-   file, which is where unshipped work lives.
-6. `TODO.md` — state, and every figure.
+1. **Split `INTERNALS.md`.** It answers three questions with different
+   audiences: how the kernel works, how to port to another architecture, and
+   how the C and Rust implementations relate. The x86 runbook and the
+   cross-language comparison are what pushed it past a thousand lines and
+   neither is needed by someone replacing a kernel. Candidate: keep the kernel
+   and state material, move porting to its own file, move the C/Rust
+   comparison to `UniBlake.md` where the design argument already lives.
 
-**Rules to apply while doing it.** The two standing complaints, both of which
-the current documents fail:
+2. **`README.md` should shrink.** It carries the document contract, the naming
+   rule and the oracle policy, which are project policy rather than
+   orientation. Someone arriving needs what this is, how to build it, and
+   where things are.
 
-**Cut the volume.** The writing is too long. Say the thing once, in as few
-words as carry it, and stop. No restating what an adjacent paragraph already
-said, no aphorisms, no "as we saw above", no sentence whose job is to
-introduce the next one. A heading earns its place by answering a question a
-reader actually has. Prefer a table to a paragraph and a sentence to a table
-when the sentence is enough. Cross-file pointers only from `README`.
+3. **The libsodium oracle deserves its own section in `README.md`**, placed
+   after the per-platform subsections. It is currently split between the top
+   of *Build and test* and the middle of the Ubuntu section, and the platform
+   table points at "the Ubuntu section" for guidance that is not
+   Ubuntu-specific. The source-build recipe also does not say which directory
+   each command runs in, which has already produced a `make bench` in the
+   wrong tree.
 
-**Get the numbers out of the prose.** Measurements change with the machine,
-the compiler, the oracle build and the tree state; a figure written into a
-paragraph is stale the next time anything moves, and nothing signals it.
-`TODO.md` owns every figure, with its conditions, and is pruned each pass.
-The permanent documents state mechanisms, which do not rot. Where a document
-must refer to a measurement, name the direction and the target that
-reproduces it -- "measurably slower, see `make ab`" -- not the digits.
+4. **`GUIDE.md` at 632 lines** absorbed the wiping material. Check whether it
+   still reads as one document or two.
 
-This applies to explanatory text as much as to reference tables: a paragraph
-carrying three timings and a confidence interval is the failure mode, not a
-thorough job.
-
-**Specific: promote the libsodium oracle to its own section in `README`.**
-The oracle material is currently split between the top of *Build and test*
-("libsodium is a test oracle, not a dependency") and the middle of
-*#### Ubuntu 24.04 and 18.04* (which version, why build flags matter more than
-the version, the 288/178/175 measurement table, and the source-build recipe).
-None of that is Ubuntu-specific; it applies on macOS and Windows equally. Three
-problems follow from where it sits:
-
-- The platform table says "see the Ubuntu section below" for oracle guidance,
-  which sends a reader to a distro section for something distro-independent.
-- The two halves of one topic are eighty lines apart.
-- Nothing states that the source-build recipe is a **prerequisite** rather than
-  an alternative: `$HOME/opt/libsodium-1.0.21` does not exist until it is
-  built, and running a `bench` target against it first fails. (The Makefile
-  error now explains this; the README still should.)
-- The recipe does not say **which directory each command runs in**. The
-  download, configure and install happen in a scratch directory; `make check`
-  and `make bench` are uniblake targets and must run in the uniblake checkout.
-  The trailing `cd ..` returns to wherever the download started, not there, so
-  a reader following the block in order lands in libsodium's tree and gets
-  "No rule to make target 'bench'". Show the `cd` back explicitly, or split
-  the block in two with a heading on each.
-
-Proposed shape -- a peer subsection placed **after** the per-platform ones, so
-platform setup still comes first:
-
-    #### The libsodium oracle
-        what it is and is not (moved from the top of Build and test)
-        which version, and why
-        build flags matter more than the version (the measurement table)
-        building the reference version (recipe, with the prerequisite stated)
-
-Each platform subsection keeps only its one-line quick command, which is the
-part that genuinely differs by platform. The table caption changes to name the
-new section instead of pointing at Ubuntu. Net effect: `README` gets shorter,
-the Ubuntu section is about Ubuntu again, and there is one place to look for
-"which libsodium am I measuring against".
+Rules while doing it. Say the thing once, in as few words as carry it. No
+restating what an adjacent paragraph said, no aphorisms, no sentence whose job
+is to introduce the next one. Prefer a table to a paragraph and a sentence to
+a table when the sentence is enough. Cross-file pointers only from `README.md`.
+Figures live in `TODO.md` and nowhere else; a permanent document names the
+`make` target that reproduces a number rather than quoting digits.
 
 ### Visual material
 
@@ -474,46 +404,13 @@ inline figures did.
   freeze that crate's `&mut Self` builder convention into this API permanently
   to save a handful of one-line edits.
 
-## measurements.tsv
+## Figures
 
-Every figure, newest first, with what it takes to reproduce or to refuse a
-comparison. Appended by `make record`, never edited by hand.
+Measured numbers live here and nowhere else. The format, columns, metric
+vocabulary and commands are specified in `docs/UniBench.md`; this section is
+the data.
 
-**A row says what was measured, when, on what. It does not say what is true
-now.** A measurement is true of one commit, one machine, one compiler, one
-oracle build; when any of those move it becomes history. Only re-running tells
-you the current answer.
-
-Columns: `utc project commit dirty platform cpu compiler oracle oracle_flags
-run metric value unit n reps note`.
-
-`oracle_flags` is not optional detail. Two builds of libsodium 1.0.21 on the
-same machine measured 288 and 178 ns/digest -- the version was identical and
-the optimisation level was not. A row without flags cannot be compared to one
-with them.
-
-`dirty` marks a working tree with uncommitted changes. A dirty row is a
-datapoint about code that no longer exists anywhere; treat it as provisional.
-
-### UniBench
-
-The measurement format is specified in `docs/UniBench.md`: columns, metric
-vocabulary, platform identifiers, repetition menu, commands. Not repeated
-here.
-
-Adoption status:
-
-- uniblake harnesses: recorded via `make record`.
-- ZeroPerf `solver_timing`: parser written, works against real output.
-- ZeroPerf `res_sample.sh` (CPU, RSS, threads, disk) and `bucket_profile2.py`
-  (19 named cost buckets): parsers not written. No script change needed --
-  that is what the translator is for.
-- libsodium: never instrumented. It is an oracle; uniblake's `bench-compare`
-  times it from outside through its public API and records it as a reference
-  row. Patching a dependency's benchmarks makes it a fork to maintain and
-  destroys the independence that makes it useful.
-
-## Figures — x86-64 Linux, VM
+### x86-64 Linux, VM
 
 First x86-64 run. Ubuntu VM, libsodium 1.0.21 from a `$HOME/opt` source build.
 CPU model not captured; a VM, so absolute figures carry hypervisor overhead
@@ -552,7 +449,7 @@ Open from this run:
 Use `make collect SODIUM=<prefix>` for the next run; it captures all of the
 above plus the machine and oracle details in one file.
 
-## Figures
+### aarch64, macOS
 
 Every measured number, with the conditions. Apple M4 Pro, clang -O2,
 aarch64, unless stated. Reference oracle is libsodium **1.0.21**, the version

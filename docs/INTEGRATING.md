@@ -8,6 +8,23 @@ The rule throughout: **the digests must not change**. Where the digest is part
 of a protocol or a stored format, a different digest is a compatibility break,
 not an optimization.
 
+This procedure has been carried out once, against a proof-of-work node whose
+Equihash implementation used libsodium's BLAKE2b. What that produced, as a
+worked example of each step below:
+
+| step | result |
+|---|---|
+| baseline | fixed-nonce solve timing, deterministic, identical work per arm |
+| swap | a wrapper giving the opaque state value semantics, so call sites did not change |
+| prove | 20,000 digests byte-identical, plus the chain's own genesis vectors |
+| prefix interface | per-digest state copy removed; 1.15x on the per-digest cost |
+| measure the consumer | leaf generation is about a quarter of a solve, so the digest-level gain is a few percent of the whole |
+| threads | already threaded by the consumer; the batch entry point does not apply where counters are strided |
+
+The measured figures are in `TODO.md`. The step that mattered most was
+proving the digests first: on a consensus path a changed digest is a fork, and
+no speedup is worth discovering that later.
+
 ## 1. Before touching the consumer
 
 Build and check uniblake standalone on the target machine:
