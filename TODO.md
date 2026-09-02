@@ -157,6 +157,19 @@ and not a dependency of this library -- see the README.
 
 ## Backlog
 
+### Warm up bench_prefix
+
+`bench/bench_prefix.c` has no warmup spin, unlike `bench_phases.c` and
+`bench_compare.c`. Its first timed rep pays the process startup transient,
+measured at about 2.5x on an idle machine. A median over 10 reps absorbs most
+of it, but the harness is not directly comparable with the other two, and it
+is the one `make bench` runs.
+
+Fix: add the same 300 ms spin the other two use, before the first clock start.
+Cheap and mechanical. The reason to pause is that changing it shifts every
+figure this harness has ever produced, so it wants doing in one step with a
+before-and-after pair recorded, not slipped in.
+
 ### Consumer transition to the C library
 
 A consuming node's proof-of-work code uses libsodium's BLAKE2b directly. Its
@@ -460,6 +473,45 @@ inline figures did.
 - A `blake2b_simd`-shaped compatibility facade for Rust consumers: it would
   freeze that crate's `&mut Self` builder convention into this API permanently
   to save a handful of one-line edits.
+
+## measurements.tsv
+
+Every figure, newest first, with what it takes to reproduce or to refuse a
+comparison. Appended by `make record`, never edited by hand.
+
+**A row says what was measured, when, on what. It does not say what is true
+now.** A measurement is true of one commit, one machine, one compiler, one
+oracle build; when any of those move it becomes history. Only re-running tells
+you the current answer.
+
+Columns: `utc project commit dirty platform cpu compiler oracle oracle_flags
+run metric value unit n reps note`.
+
+`oracle_flags` is not optional detail. Two builds of libsodium 1.0.21 on the
+same machine measured 288 and 178 ns/digest -- the version was identical and
+the optimisation level was not. A row without flags cannot be compared to one
+with them.
+
+`dirty` marks a working tree with uncommitted changes. A dirty row is a
+datapoint about code that no longer exists anywhere; treat it as provisional.
+
+### UniBench
+
+The measurement format is specified in `docs/UniBench.md`: columns, metric
+vocabulary, platform identifiers, repetition menu, commands. Not repeated
+here.
+
+Adoption status:
+
+- uniblake harnesses: recorded via `make record`.
+- ZeroPerf `solver_timing`: parser written, works against real output.
+- ZeroPerf `res_sample.sh` (CPU, RSS, threads, disk) and `bucket_profile2.py`
+  (19 named cost buckets): parsers not written. No script change needed --
+  that is what the translator is for.
+- libsodium: never instrumented. It is an oracle; uniblake's `bench-compare`
+  times it from outside through its public API and records it as a reference
+  row. Patching a dependency's benchmarks makes it a fork to maintain and
+  destroys the independence that makes it useful.
 
 ## Figures — x86-64 Linux, VM
 

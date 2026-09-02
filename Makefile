@@ -158,6 +158,26 @@ bench-compare: sodium-check | $(BUILD)
 collect:
 	@sh tools/collect.sh "$(SODIUM)"
 
+# Append machine-readable rows to measurements.tsv, newest first.
+#   make record RUN=bench-phases PLATFORM=mac-m4-14c
+#   make record RUN=bench-compare PLATFORM=linux-x86-vps-2c SODIUM=<prefix> \
+#        ORACLE=1.0.21 ORACLE_FLAGS='-O2'
+PLATFORM ?=   # derived by tools/platform_id.sh when empty
+ORACLE ?=
+ORACLE_FLAGS ?=
+# Read measurements.tsv for a human. ARGS passes viewer flags:
+#   make results                    latest run
+#   make results ARGS=--runs        what runs exist
+#   make results ARGS=--compare     latest two of each shape, side by side
+results:
+	@python3 tools/bench.py $(ARGS)
+
+record:
+	@$(MAKE) -s $(RUN) SODIUM=$(SODIUM) | python3 tools/record.py \
+	  --project uniblake --platform "$(PLATFORM)" --run "$(RUN)" \
+	  --kind "$(or $(KIND),median)" --exec "$(or $(EXEC),native)" \
+	  --oracle-version "$(ORACLE)" --oracle-flags "$(ORACLE_FLAGS)"
+
 bench-compare-avx2: avx2-check sodium-check | $(BUILD)
 	$(CC) $(CFLAGS) $(AVX2FLAGS) $(INC) $(SODINC) bench/bench_compare.c \
 	  src/core.c src/const.c src/prefix.c backends/compress_avx2.c \

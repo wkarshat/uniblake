@@ -383,6 +383,7 @@ Each document owns a question and carries that topic whole.
 | [docs/GUIDE.md](docs/GUIDE.md) | *how to call it* — recipes, interface reference, sizing rules, adapters, the C++ wrapper | writing calling code |
 | [docs/INTERNALS.md](docs/INTERNALS.md) | *how it works* — state, the compression kernel, porting, measurements | replacing a kernel or porting |
 | [docs/INTEGRATING.md](docs/INTEGRATING.md) | *how to adopt it* — swapping the hash in an existing codebase, in a validated order | migrating a consumer |
+| [docs/UniBench.md](docs/UniBench.md) | *the measurement format* — columns, metric vocabulary, platform ids, commands | recording or reading a benchmark |
 | [TODO.md](TODO.md) | *what is in flight* — backlog, active work, and every measured figure with its conditions | checking status, or looking up a number |
 
 ### What does not go in these documents

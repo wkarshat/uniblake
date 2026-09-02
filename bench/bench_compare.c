@@ -25,7 +25,7 @@
 static double ns(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1e9+t.tv_nsec;}
 static int cmpd(const void*a,const void*b){double x=*(const double*)a,y=*(const double*)b;return(x>y)-(x<y);}
 
-enum { PRE = 140, OUT = 50, REPS = 7, THREADS = 2 };
+enum { PRE = 140, OUT = 50, REPS = 10, THREADS = 2 };
 static const size_t LEAF_N[] = { 10000, 100000, 400000 };
 static const size_t BULK_N[] = { 1u<<10, 1u<<14, 1u<<20, 1u<<24 };
 
@@ -56,7 +56,7 @@ int main(void){
   double t[REPS];
 
   printf("# uniblake C comparison harness\n");
-  printf("# prefix=%dB digest=%dB reps=%d threads=%d (median ns/digest)\n", PRE, OUT, REPS, THREADS);
+  printf("# prefix=%dB digest=%dB reps=%d timed threads=%d (median ns/digest)\n", PRE, OUT, REPS, THREADS);
   printf("# state: uniblake=%zuB libsodium=%zuB\n",
          ub_state_size(), sizeof(crypto_generichash_blake2b_state));
 

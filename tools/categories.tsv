@@ -1,0 +1,29 @@
+# Algorithm and subsystem names used after a metric prefix, e.g.
+# algo.blake2b, sync.leveldb. Listed so a name is spelled one way.
+#
+# name	domain	note
+#
+# --- algorithms -----------------------------------------------------------
+blake2b	algo	the hash itself, any implementation
+equihash	algo	the PoW as a whole; see the parts below
+equihash.gen	algo	leaf generation -- the blake2b part of a solve
+equihash.sort	algo	sorting and bucketing between rounds
+equihash.collide	algo	collision finding and merge rounds
+equihash.verify	algo	checking a submitted solution
+groth16	algo	zk-SNARK proof verification
+sha256	algo	transaction and header hashing
+#
+# --- Zero-specific ---------------------------------------------------------
+# Named separately because they are this chain's shape, not the algorithm's.
+zero.pow	zero	Zero's (192,7) parameters end to end; localsolps is cumulative
+zero.sprout	zero	Sprout shielded pool
+zero.sapling	zero	Sapling shielded pool
+zero.witness	zero	note witness maintenance
+#
+# --- node subsystems, for sync profiles ------------------------------------
+# Not algorithms. Present because a sync profile has to account for all the
+# time, and most of it is not cryptography.
+leveldb	sync	block index and chainstate database
+walletdb	sync	wallet storage
+disk	sync	block file reads and decode
+connect	sync	ConnectBlock and chain activation

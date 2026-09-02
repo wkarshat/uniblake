@@ -1,0 +1,27 @@
+# unibench metric vocabulary. A metric name not listed here is rejected by
+# tools/record.py, so a typo becomes an error instead of a silently orphaned
+# row that never groups with its siblings.
+#
+# prefix	kind	unit	meaning
+#
+# --- algorithm cost: what this project exists to measure -------------------
+leaf	figure	ns/digest	one digest over a shared prefix
+bulk	figure	MB/s	throughput on one long message
+phase	figure	ns/digest	one stage of the per-digest path
+isa	figure	ns	latency of one machine instruction
+solve	figure	s	one Equihash solve, fixed nonce
+nsols	figure	count	solutions found by one solve
+kernel	figure	count	static property of generated code
+#
+# --- resource cost: how a process behaves while doing the above ------------
+cpu	series	pct	processor time, percent of one core
+mem	series	MB	memory
+io	series	MB/s	device throughput
+#
+# --- share of a whole: measured, not derived -------------------------------
+# A profiler reports these directly; they are numbers, not computed ratios.
+# Sync-profile categories live under sync. because they answer a different
+# question from algorithm cost -- where a node's wall time goes -- and should
+# not sort next to leaf/bulk figures.
+algo	share	pct	share of run time in an algorithm
+sync	share	pct	share of node wall time in a subsystem

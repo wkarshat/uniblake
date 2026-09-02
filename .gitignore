@@ -4,6 +4,7 @@
 *.a
 build/
 build-*/
+__pycache__/
 
 # Agent scratch
 agent.prompt

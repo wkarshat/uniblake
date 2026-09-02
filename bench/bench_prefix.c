@@ -12,13 +12,20 @@
 static double ns(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1e9+t.tv_nsec;}
 static int cmpd(const void*a,const void*b){double x=*(double*)a,y=*(double*)b;return(x>y)-(x<y);}
 #define N 400000
-#define REPS 7
+/* Timed repetitions, from the standard menu (5, 10, 100).
+ *
+ * Unlike bench_phases.c and bench_compare.c this harness has no warmup spin,
+ * so its first rep pays the process startup transient -- measured at ~2.5x on
+ * an idle machine. A median over 10 absorbs it, but the figures here are not
+ * directly comparable with those harnesses. Prefer bench-compare for anything
+ * recorded. */
+#define REPS 10
 int main(void){
   if(sodium_init()<0) return 77;
   enum{PRE=140,OUT=50};
   uint8_t pre[PRE],out[64]; for(int i=0;i<PRE;i++) pre[i]=(uint8_t)(i*7+1);
   volatile uint8_t sink=0; double t[REPS];
-  printf("prefix=%dB digest=%dB N=%d reps=%d (median ns/digest)\n\n",PRE,OUT,N,REPS);
+  printf("prefix=%dB digest=%dB N=%d reps=%d timed (median ns/digest)\n\n",PRE,OUT,N,REPS);
 
   for(int r=0;r<REPS;r++){
     crypto_generichash_blake2b_state base,s;
