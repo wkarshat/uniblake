@@ -157,6 +157,88 @@ and not a dependency of this library -- see the README.
 
 ## Backlog
 
+### Consumer transition to the C library
+
+A consuming node's proof-of-work code uses libsodium's BLAKE2b directly. Its
+inner loop is this library's target shape: a prefix state absorbed once, then
+one digest per consecutive counter. The prefix handling there is already
+correct -- the state is shared, not re-absorbed -- so the gains are elsewhere.
+
+**Obstacle, common to every option.** The consumer declares hash states by
+value on the stack and copies them by assignment, which works because the
+reference's state is a public fixed-size array. This library's is opaque:
+sized by `ub_state_size()`, copied by `ub_copy()`. Those declarations must
+change regardless of which route is taken. The compatibility shim maps
+function names and deliberately does not paper over this.
+
+**B1 -- replace the per-digest helper with `ub_hash_tail`.** One function
+body; all its call sites are unchanged. Removes the state copy per digest
+rather than shrinking it, and covers the sites whose counters are not
+consecutive. Strictly better than the minimal "shim plus opaque state" route,
+for about one extra function body, so that route is dropped.
+
+**B2 -- replace the two consecutive-counter loops with `ub_hash_n`.**
+Decided: **one call for the whole range**, with the cancellation check once
+around it rather than per digest. The worst-case cancellation latency is the
+time to hash the full list, which measures well under a second and sits inside
+a two-minute block interval. This also removes roughly two million
+`std::function` indirect calls per solve.
+
+Measured at the consumer's exact geometry (140 B prefix, 4-byte counter,
+48-byte output): `ub_hash_n` produces **byte-identical digests** to the loop
+it replaces, and runs **slightly slower** than it on scalar aarch64. So B2
+today is a small cost, not a speedup. **Its payoff is contingent on a
+multi-message vector kernel that does not exist yet**; what it buys now is the
+call shape such a kernel would fill, plus the removed per-digest callbacks.
+
+That argues for doing B1 and stopping, unless the vector kernel is actually
+being pursued. B2 without it is churn in consensus code for a negative
+scalar delta.
+
+Sequencing: B1 first, measured. B2 separately, since its risk and its payoff
+differ. Both touch consensus code -- a digest change is a fork -- so the
+published vectors, the alias suite and the consumer's own solver vectors must
+be green before and after.
+
+### State allocation helpers — to review and decide
+
+**Proposal:** add `ub_state_new()` and `ub_state_free()` to the public API.
+
+The library reports `ub_state_size()` and `ub_state_align()` and leaves
+allocation to the caller. That is the right default -- a caller with its own
+arena, a pool, or a stack buffer should not be forced through malloc. But it
+means every consumer writes the same aligned allocation, and the C++ ones
+write it twice: once to allocate, once for a destructor.
+
+Evidence from the first real consumer. Porting a proof-of-work implementation
+needed a wrapper class whose entire body is an aligned allocate, a free, and
+`ub_copy` for value semantics. Writing it surfaced two things:
+
+- `ub_aligned_alloc` exists in `tests/ub_alloc.h` and is exactly what a
+  consumer wants, but it is test-only and not installed. The consumer
+  reimplemented it, choosing between `aligned_alloc` and `posix_memalign` on
+  the same version conditions the library already resolves internally.
+- The size must be rounded up to a multiple of the alignment for
+  `aligned_alloc` to be legal. `ub_state_size()` already satisfies that, but a
+  consumer cannot know so without reading the source, so it rounds defensively.
+
+Both are the library's knowledge leaking into every caller.
+
+**Against:** it adds two symbols and an allocation policy to a library whose
+current claim is that it allocates nothing and holds no pointer into caller
+storage. That claim is load-bearing -- it is why the state can live in an
+arena or shared memory -- and a `_new`/`_free` pair invites callers to stop
+thinking about it. It also raises the question of what `_free` does with a
+keyed state, which is the wiping question again.
+
+**Middle option:** install `ub_alloc.h` as a documented convenience header,
+so the helper is available without the library itself gaining an allocator.
+Keeps the no-allocation claim exactly true and removes the duplication.
+
+**Not decided.** The middle option looks right, but the naming, whether it
+belongs in the main header, and the keyed-state interaction all want settling
+first.
+
 ### API additions, not yet built
 
 Collected from the requirements review; none is implemented. Kept here rather

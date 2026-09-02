@@ -87,6 +87,41 @@ int main(void){
     free(full); free(sl); }
 
   ub_aligned_free(S);
+  /* The two paths a consumer may choose between must agree exactly.
+   *
+   * A caller with consecutive counters can either clone the prefix state and
+   * finalize per digest (ub_hash_tail's shape), or hand the whole range to
+   * ub_hash_n. If those ever diverge, a consumer that switches paths changes
+   * its digests -- which, on a proof-of-work path, is a chain fork. This
+   * checks them at the geometry such a consumer actually uses: a 140-byte
+   * prefix, a 4-byte little-endian counter, and a digest consumed in
+   * fixed-width slices. */
+  { enum { PRE2=140, OUT2=48, NN=3000 };
+    uint8_t pre2[PRE2]; for(int i2=0;i2<PRE2;i2++) pre2[i2]=(uint8_t)(i2*7+1);
+    ub_state *B=ub_aligned_alloc(ub_state_align(),ub_state_size());
+    ub_state *W2=ub_aligned_alloc(ub_state_align(),ub_state_size());
+    uint8_t *loop=malloc((size_t)NN*OUT2), *batch=malloc((size_t)NN*OUT2);
+    ub_param P2; ub_param_init(&P2,OUT2);
+    ub_init_param(B,&P2); ub_update(B,pre2,PRE2);
+
+    for (unsigned g=0; g<NN; ++g) {
+      ub_copy(W2,B);
+      uint8_t le[4]={(uint8_t)g,(uint8_t)(g>>8),(uint8_t)(g>>16),(uint8_t)(g>>24)};
+      ub_update(W2,le,4);
+      ub_final(W2,loop+(size_t)g*OUT2,OUT2);
+    }
+    ok(ub_hash_n(B,4,0,NN,0,0,batch,OUT2)==UB_OK,"batch rc",0);
+    ok(memcmp(loop,batch,(size_t)NN*OUT2)==0,"per-digest loop == ub_hash_n",0);
+
+    /* ub_hash_tail, the other spelling of the same per-digest work. */
+    for (unsigned g=0; g<64; ++g) {
+      uint8_t le[4]={(uint8_t)g,(uint8_t)(g>>8),(uint8_t)(g>>16),(uint8_t)(g>>24)};
+      uint8_t one[OUT2];
+      ub_hash_tail(B,le,4,one,OUT2);
+      ok(memcmp(one,loop+(size_t)g*OUT2,OUT2)==0,"hash_tail == loop",(long)g);
+    }
+    free(loop); free(batch); ub_aligned_free(B); ub_aligned_free(W2); }
+
   printf("prefix: checks=%d fails=%d -> %s\n",checks,fails,fails?"FAIL":"PASS");
   return fails!=0;
 }
