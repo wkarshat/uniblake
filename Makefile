@@ -84,10 +84,32 @@ check-kat: | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) tests/test_kat.c $(SRC) -o $(BUILD)/ub_kat$(EXE)
 	$(BUILD)/ub_kat$(EXE)
 
-check-alias: | $(BUILD)
+check-alias: check-build | $(BUILD)
+	$(BUILD)/ub_alias$(EXE)
+
+# Build the alias suite without running it. Split out because a cross build
+# cannot run its own output: the exit code otherwise reports a failure that is
+# only the host refusing to execute a foreign binary.
+#
+#   make check-build BUILD=build-win CC=x86_64-w64-mingw32-gcc EXE=.exe
+#
+# check-alias is the suite to cross-build: its oracle is vendored, so it links
+# nothing for the target. The others need a libsodium built for it.
+check-build: | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) -Icompat -Icompat/ref compat/test_blake2_alias.c \
 	  $(SRC) compat/ref/ref_blake2b.c -o $(BUILD)/ub_alias$(EXE)
-	$(BUILD)/ub_alias$(EXE)
+
+# Run a cross-built Windows binary under Wine. WINEDEBUG=-all silences Wine's
+# complaints about having no desktop, which a console program does not need.
+#
+#   make check-wine BUILD=build-win
+WINE ?= wine
+check-wine:
+	@test -f $(BUILD)/ub_alias.exe || { \
+	  echo "no $(BUILD)/ub_alias.exe -- run check-build first, e.g."; \
+	  echo "  make check-build BUILD=build-win CC=x86_64-w64-mingw32-gcc EXE=.exe"; \
+	  exit 1; }
+	WINEDEBUG=-all $(WINE) $(BUILD)/ub_alias.exe
 
 check: sodium-check check-kat check-alias | $(BUILD)
 	$(CC) $(CFLAGS) $(INC) $(SODINC) tests/test_core.c   $(SRC) $(SODLIB) -o $(BUILD)/ub_core$(EXE)

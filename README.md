@@ -296,8 +296,12 @@ own `BUILD` so it sits beside the native one; see "Two toolchains, one checkout"
 sudo apt install gcc-mingw-w64-x86-64          # macOS: brew install mingw-w64
 
 make BUILD=build-win CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar EXE=.exe
-make check-alias BUILD=build-win CC=x86_64-w64-mingw32-gcc EXE=.exe
+make check-build BUILD=build-win CC=x86_64-w64-mingw32-gcc EXE=.exe
 ```
+
+`check-build` compiles the suite without running it. `check-alias` builds and
+runs, which a cross build cannot do: the exit code would report a failure that
+is only the host refusing to execute a foreign binary.
 
 Pass the variables as `make` arguments on each line; collecting them in a shell
 variable does not work.
@@ -307,9 +311,23 @@ second builds `build-win/ub_alias.exe`, a PE32+ console executable. `check-alias
 suite to cross-build because its oracle is vendored; the other suites link libsodium and
 need one built for the same target.
 
-Compilation establishes that the source is portable to the target. It does not establish
-digest correctness there -- that requires execution, either under Wine or by copying
-`build-win/` to a Windows machine and running the binaries.
+On Ubuntu, Wine runs the result in place, which verifies digests on the
+Windows target without a Windows machine:
+
+```
+sudo apt install wine64
+make check-wine BUILD=build-win
+blake2-alias: checks=1218 fails=0 -> PASS
+```
+
+`check-wine` sets `WINEDEBUG=-all`, which silences Wine's complaints about
+having no desktop -- a console program does not need one. Without it the run
+still passes; those messages are on stderr and the exit code is 0.
+
+Compilation alone establishes only that the source is portable to the target.
+The Wine run above establishes digest correctness there. Copying `build-win/`
+to a Windows machine remains the stronger check, since Wine is an
+implementation of the API rather than the platform itself.
 
 Verified from macOS/arm64 with MinGW-w64 GCC 16.2.0: the library compiles warning-free
 under `-Wall -Wextra -Wpedantic`, and both no-oracle suites link into PE32+ binaries.
