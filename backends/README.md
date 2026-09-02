@@ -9,10 +9,26 @@ checked with the same suites as the shipped code.
 | `compress_avx2.c` | `ub_compress` | same, plus `-mavx2` (x86-64 with AVX2) |
 | `hash_n_threads.c` | `ub_hash_n` | `-DUB_HASH_N_SERIAL -DUB_THREADS=N`, add this, `-lpthread` |
 
-`make check-backends` runs the kernels this host can execute. The AVX2 kernel
-needs an x86-64 host: `make check-avx2` and `make bench-avx2` there, or
-cross-compile with `CC=x86_64-w64-mingw32-gcc EXE=.exe` and run the binaries
-on the target. `make probe` reports whether a CPU has AVX2.
+`make check-backends` runs the kernels this host can execute. `make probe`
+reports whether a CPU has AVX2.
+
+**The AVX2 kernel can be built and run on an Apple-silicon Mac.** Apple clang
+is a cross-compiler and Rosetta 2 executes AVX2 even though it does not
+advertise it in CPUID:
+
+```
+make check-avx2-rosetta        # builds x86-64, runs under Rosetta
+```
+
+That covers the published vectors (1,536) and the API suite (155). It cannot
+cover the oracle suites, because a Homebrew libsodium is arm64 and cannot be
+linked into an x86-64 binary -- so those need a real x86-64 host, or a
+libsodium built for x86-64.
+
+Emulation establishes correctness and nothing about speed. There is still no
+AVX2 timing; `make bench-avx2` on real x86-64 is the only thing that produces
+one. On a native x86-64 host use `make check-avx2` and `make bench-avx2`, or
+cross-compile with `CC=x86_64-w64-mingw32-gcc EXE=.exe`.
 
 The AVX2 kernel passes the oracle suites on x86-64 and is measured below.
 

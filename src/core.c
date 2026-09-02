@@ -103,7 +103,7 @@ int ub_init_key(ub_state *S, size_t outlen, const void *key, size_t keylen) {
 #if UB_WIPE
   S->keyed = 1;   /* ub_init_param zeroed the state, so set this after it */
 #endif
-  /* The key is absorbed as one zero-padded block (RFC 7693 §2.9). */
+  /* The key is absorbed as one zero-padded block (RFC 7693 §3.3). */
   uint8_t blk[UB_BLOCKBYTES];
   memset(blk, 0, sizeof blk);
   memcpy(blk, key, keylen);

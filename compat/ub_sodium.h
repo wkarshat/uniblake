@@ -29,7 +29,7 @@ crypto_generichash_blake2b_init(ub_state *S, const unsigned char *key,
 { return keylen ? ub_init_key(S, outlen, key, keylen) : ub_init(S, outlen); }
 
 /* Routes keyed calls through ub_init_key, which absorbs the key as one
- * zero-padded 128-byte block (RFC 7693 §2.9). Setting P.key_length and
+ * zero-padded 128-byte block (RFC 7693 §3.3). Setting P.key_length and
  * feeding the raw key would produce a wrong digest. */
 static inline int
 crypto_generichash_blake2b_init_salt_personal(ub_state *S,

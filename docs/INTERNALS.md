@@ -7,22 +7,37 @@ Callers want GUIDE.md instead.
 
 ---
 
+## Contents
+
+- [How this kernel behaves](#how-this-kernel-behaves)
+- [State](#state)
+- [The compression kernel](#the-compression-kernel)
+- [Porting and profiling](#porting-and-profiling)
+- [Measurements and conformance](#measurements-and-conformance)
+  - [Per-digest](#per-digest)
+  - [Per workload](#per-workload)
+  - [Conformance](#conformance)
+  - [C and Rust: one design, two implementations](#c-and-rust-one-design-two-implementations)
+  - [Running this work on x86-64](#running-this-work-on-x86-64)
+
 # How this kernel behaves
 
 Things that turned out to be true about BLAKE2b on this code, with the
 command that shows each one. Not a log of what was tried -- the point is the
 mechanism, so the next person reasons from it instead of re-measuring.
 
+**Figures are not here.** Every measured number lives in `TODO.md`, which is
+pruned each pass. These sections carry mechanisms, which do not rot.
+
 **Reproduce:** `make kernel-stats` (what the compiled kernel does),
 `make bench-phases` (where a digest's time goes), `make bench-compare`
 (against libsodium, comparable to the Rust harness), `make ab` (A/B two
 binaries with a resolution verdict -- required for any performance claim).
 
-**Before tuning anything, read `docs/CONSUMERS.md`** (and
-`docs/API_PROPOSAL.md` for the changes it argues for): it records what the
-Zcash consumers actually call, which decides what is a hot path and what is a
-conformance obligation. Keyed hashing is the latter -- no Zcash call site uses
-it. **On x86-64, read `docs/X86.md` first**: several results below are
+**Before tuning anything**, read the adoption document: it records what the
+the observed consumers actually call, which decides what is a hot path and what is a
+conformance obligation. Keyed hashing is the latter -- no observed call site uses
+it. **On x86-64**, see *Running this work on x86-64* below: several results are
 aarch64 codegen results and are expected to differ.
 
 ### AArch64 folds the last round's rotate away for free
@@ -44,7 +59,7 @@ instructions and the transformation is unexplored. In a vector kernel it
 matters more again: `ror 63` has no single-instruction form
 (`vpaddq`+`vpsrlq`+`vpor`), so deferring the final round's is removing the
 most expensive rotate in the kernel across every lane. See
-`Requihash/BLAKE/OPTIMIZATIONS.md` §2b.
+`the parked-optimisations notes` §2b.
 
 ### Unrolling wins here, and the mechanism is the sigma lookup
 
@@ -65,21 +80,21 @@ collecting the saving.
 Every round consumes all sixteen message words, so 16 `m` + 16 `v` = 32 live
 64-bit values against 31 general-purpose registers. Some spilling is forced.
 
-Measured, it is minor: **0.15 spill operations per rotate**. The number is
+Measured, it is minor: **well under one spill operation per rotate**. The number is
 easy to inflate three ways, all of which `tools/kernel_stats.py` separates:
 
-- **Callee-saved registers.** 47 of the stack operations are x19-x28/x29/x30
+- **Callee-saved registers.** Most of the stack operations are x19-x28/x29/x30
   save and restore -- paid once per call, not per round. Counting them with
   the spills roughly doubles the apparent rate.
-- **Stores are not pairs.** The 15 stores are 15 *distinct slots*, each
+- **Stores are not pairs.** The stores are distinct slots, each
   written once: the allocator evicts a value and then re-reads it, which is
-  where the 42 loads come from. A store:load ratio is not a spill count.
-- **Inbound arguments.** 8 slots are read but never written -- message words
+  where the loads come from. A store:load ratio is not a spill count.
+- **Inbound arguments.** Several slots are read but never written -- message words
   arriving in the caller's frame, not spills at all.
 
 Because the rate is already this low, allocator-aimed rewrites have little to
 recover: variants using named locals instead of `v[16]`, or re-loading message
-words from the block instead of holding `m[16]`, all land within 0.5 ns.
+words from the block instead of holding `m[16]`, all land within noise; see `TODO.md`.
 
 ### Passing state as separate arrays costs more than mutating it
 
@@ -87,14 +102,14 @@ words from the block instead of holding `m[16]`, all land within 0.5 ns.
 `f` into locals and passing them to the kernel separately -- the shape
 `uniblake-rs` uses, where `State::finalize` takes `&self` -- measures
 **~1.7 ns slower**, and `make kernel-stats` shows why: spill traffic rises
-from 15/42 to **17/48**. Three independent pointers can alias where one
+measurably. Three independent pointers can alias where one
 `struct ub_state *` cannot, so the compiler reloads more conservatively.
 
 The Rust form is right for Rust, where `&self` is also what makes a prefix
 state shareable without a copy. It does not follow that it is right for C, and
 here it is not.
 
-### The finalization flag does not have to live in the state -- measured
+### The finalization flag does not have to live in the state
 
 C carries `f[2]`, 16 bytes of a 232-byte state. `uniblake-rs` carries no flag:
 `compress` takes `last: bool`. The Rust shape ports to C cleanly, and was
@@ -107,17 +122,9 @@ built and measured rather than argued about:
   the kernel, keep a one-byte `fin` for the guard. That byte is free: it
   shares the slot `buflen`/`outlen`/`keyed` already occupy.
 
-Result: **state 232 -> 216 bytes, identical to the Rust layout**, all suites
-passing. Measured with `tools/ab_compare.py` at 24 alternating pairs:
-
-| | difference | 95% CI |
-|---|--:|---|
-| state copy | **-0.13 ns** | [-0.14, -0.10] |
-| full leaf | **-0.43 ns** | [-0.86, -0.05] |
-
-Both intervals exclude zero, so both are resolved. An earlier pass at six
-samples reported "no change" for the leaf; that was an under-sampled null, not
-a result -- see *Saying what a measurement can support*.
+The flag is now a kernel argument and a one-byte `fin` carries the guard, so
+the C and Rust states have the same 216-byte composition. It measured a small
+improvement at the leaf and on the state copy; the figures are in `TODO.md`.
 
 Worth knowing for two reasons. It is the correct layout -- the flag is a
 property of one compression, not of the state between absorbs, which is the
@@ -134,10 +141,9 @@ this is a decision about compatibility, not about speed.
 Two Rust design differences were ported to C. The state-size one above is a
 small win. The other -- `State::finalize` taking `&self` and working on local
 copies of `h`/`t`/`f`, with a kernel that takes them as separate arguments --
-measured **+2.12 ns slower**, 95% CI [+1.76, +2.25] over 24 alternating
-pairs.
+measured slower (see `TODO.md`).
 
-`make kernel-stats` locates it: spill traffic rises from **15/42 to 17/48**.
+`make kernel-stats` locates it: spill traffic rises.
 
 The cause is register occupancy, not aliasing. `restrict` on all four
 pointers was tried and changed **nothing** -- still 17/48 -- which rules the
@@ -155,7 +161,7 @@ costs a register for the whole function. Rust pays nothing here because
 `&self` is a single pointer too; it is the *split into separate arrays* that
 costs, not the immutability.
 
-### A compression timed alone is not a component of a digest### A compression timed alone is not a component of a digest### A compression timed alone is not a component of a digest
+### A compression timed alone is not a component of a digest
 
 `make bench-phases` reports an incremental build-up -- copy, copy+update, full
 leaf -- so each stage is a difference between measured totals. It prints
@@ -177,7 +183,8 @@ so it is the one most worth getting right.
 
 The failure is concrete. Removing `f[2]` was reported as "79.4 both,
 differences within noise" from six single runs. At 24 alternating pairs the
-same change resolves cleanly at **-0.43 ns, 95% CI [-0.86, -0.05]**. The
+same change resolves cleanly, with an interval that excludes zero (the
+figures are in `TODO.md`). The
 effect was always there; the harness could not see it, and the write-up
 converted "could not see" into "is not there".
 
@@ -280,7 +287,7 @@ Not live: it cannot be updated, only imported. Name it `image` or `snapshot`.
 
 | Structure | Verdict | Why |
 |---|---|---|
-| `blake2b_state` | **state** | h, t, f, buf, buflen — all mutated by update. `outlen` and `last_node` are parameters carried inside it (see s4). |
+| `blake2b_state` | **state** | h, t, f, buf, buflen — all mutated by update. `outlen` and `last_node` are parameters carried inside it, which is the impurity named below. |
 | `ub_state` | **state** | same, minus `last_node`. |
 | `blake2b_param` | parameter | (a) — discardable after init |
 | `blake2bp_state` | collection | (b) — `blake2b_state S[4][1]` + root |
@@ -428,29 +435,6 @@ Two cautions from the BLAKE2b record:
 - A hash speedup caps out at the share of runtime the hash occupies. If
   hashing is a fifth of a workload, a 2x hash is a 1.2x workload at best.
 
-### Changes that measured flat
-
-Recorded only so they are not retried; none of them moved the digest more than
-~0.5 ns, and the reason is in *Spilling is real but small* above -- there is
-little for an allocator-aimed rewrite to recover.
-
-| change | result |
-|---|---|
-| `g()` as an inline function, rounds unrolled | unresolved at 4 pairs (|d| < 0.5 ns) |
-| `v` as sixteen named locals rather than `v[16]` | unresolved at 4 pairs (|d| < 0.5 ns) |
-| message words re-loaded from the block instead of `m[16]` | unresolved at 4 pairs; assembly identical, so no effect is expected |
-| hoisting the message-schedule row out of the round | unresolved (historical, sample count not recorded) |
-| column-major working vector | unresolved (historical, sample count not recorded) |
-| `__builtin_assume_aligned` on the block | unresolved (historical, sample count not recorded) |
-
-None of these has been re-run under `tools/ab_compare.py`. "Unresolved" here
-means the harness of the day could not separate them, **not** that they are
-known equal; a 0.4 ns effect like the `f[2]` removal would have been missed by
-every one of these tests.
-
-Two that did move it, both explained above: hand-unrolling with literal sigma
-indices (**11% faster**, adopted) and `#pragma clang loop unroll(full)`
-(**27% slower**, rejected).
 
 ### Secret material after finalization
 
@@ -804,7 +788,7 @@ runs anywhere and is a useful first signal on a bare target.
 
 Apple M4 Pro (arm64, 14 cores), Apple clang, -O2. Median of 7 reps x 400k
 digests. Reproduce with `make bench`; the oracle version is printed by the run
-and matters (see below).
+and matters.
 
 Figures from one machine and one compiler. Run the benchmarks on the target
 rather than carrying these forward.
@@ -902,3 +886,341 @@ link nothing.
 author reference itself, vendored and renamed under `compat/ref`, so it runs
 without libsodium. An alias shim has to match the implementation it is
 aliasing, which makes that the right oracle for it.
+
+## C and Rust: one design, two implementations
+
+The goal is one design expressed twice, natively: **C consumers use the C
+library, Rust consumers use the Rust crate.** No cross-language FFI, no
+adapter in the middle. Identical sizes are the evidence that the composition
+is identical, not an end in themselves.
+
+### Status
+
+| | uniblake C | uniblake-rs | agree? |
+|---|--:|--:|:--:|
+| state | **216 B**, align 8 | **216 B**, align 8 | **yes** |
+| parameter type | `ub_param` 52 B | `Params` 34 B | **no** |
+| digest output | caller's buffer | `Hash` 65 B | by design |
+
+State parity was reached by removing `f[2]` from the C state (merged; measured
+-0.43 ns [-0.86, -0.05] at the leaf) and by replacing the Rust `u128` counter
+with `[u64; 2]`. Both states are now:
+
+```
+h[8]      64   chaining value
+t[2]      16   counter
+buf[128] 128   pending block
+buflen     1
+outlen     1
+fin/…      1   finalized guard (+ wipe flag in C)
+padding    5/6
+         ---
+         216
+```
+
+### The parameter block, and what a caller should see of it
+
+The parameter block is 64 bytes and is XORed into the IV at init. Two
+documents define it between them, and the split matters:
+
+**RFC 7693 §2.5** specifies only two fields:
+
+> "byte offset: 3 2 1 0 (otherwise zero) / p[0] = 0x0101kknn / p[1..7] = 0.
+> Here the 'nn' byte specifies the hash size in bytes. The second
+> (little-endian) byte of the parameter block, 'kk', specifies the key size in
+> bytes. Set kk = 00 for unkeyed hashing. Bytes 2 and 3 are set as 01. All
+> other bytes in the parameter block are set as zero."
+> — RFC 7693, Saarinen and Aumasson, November 2015
+
+and then says explicitly:
+
+> "Note: [BLAKE2] defines additional variants of BLAKE2 with features such as
+> salting, personalized hashes, and tree hashing. These OPTIONAL features use
+> fields in the parameter block that are not defined in this document."
+
+**So salt, personalization and the tree fields are not RFC features.** They
+come from the BLAKE2 paper and are implemented by the reference code. Anything
+this library says about them cites the reference implementation, not the RFC.
+The full layout, as the reference implements it:
+
+```
+digest_length 1  key_length 1  fanout 1  depth 1
+leaf_length   4  node_offset 8  node_depth 1  inner_length 1
+reserved     14                       <- specified, must be zero
+salt         16  personal 16
+                                       = 64
+```
+
+The 14 reserved bytes are required to be zero, and are not slack: an
+implementation that skipped them would XOR the salt and personalization into
+the wrong words and produce different digests. Both libraries zero a 64-byte
+buffer and write fields into it by offset, so the reserved region is correct
+by construction. (This library splits the RFC's 8-byte `node_offset` into a
+4-byte offset and a 4-byte `xof_length`, the BLAKE2X convention; the bytes
+land in the same places.)
+
+**How the reference models it, and why that settles the interface question.**
+libsodium keeps its `blake2b_param` struct **entirely private** — it does not
+appear in any public header. Its public API is two initializers, `_init` and
+`_init_salt_personal`, taking the fields a caller actually sets. The twelve
+fields are an implementation detail of the format, not an API.
+
+The reference implementation's own answer is therefore: **do not put the
+parameter block in the interface.** This library currently does, through
+`ub_param`/`ub_init_param`, while the Rust crate exposes four fields via a
+builder. That asymmetry is not defensible as "the languages differ" — it is
+one library following the reference's shape and the other not.
+
+`ub_param` is 52 bytes: its fields sum to 50, and the three `uint32_t` members
+give the struct 4-byte alignment, which rounds 50 up to 52. That has nothing
+to do with the 64-byte block, which is built separately.
+
+**Why `ub_param` is nonetheless the right thing to keep**, on evidence rather
+than on how often it is called:
+
+- **The compatibility shim needs it, and needs it as a sequence.** libsodium's
+  `crypto_generichash_blake2b_init_salt_personal` takes key, salt,
+  personalization and digest length in one call. Reproducing that on this
+  library is three steps, because the key is not a parameter-block field in
+  the sense the others are:
+
+  1. `ub_param_init`, then write `salt` and `personal` into the block, and set
+     `key_length` -- the length goes in the block, the key bytes do not;
+  2. `ub_init_param`, which XORs the completed block into the IV;
+  3. build a zero-padded 128-byte block holding the key and `ub_update` it,
+     because a key is absorbed as the first message block (RFC 7693 §3.3),
+     not carried in the parameters.
+
+  No two-argument constructor can express that, and getting it wrong is
+  silent: setting `key_length` without absorbing the key produces a
+  well-formed digest that is simply not the right one. The shim's comment
+  says exactly this. That is the argument for keeping `ub_init_param` --
+  it is the only entry point that lets a caller stop between steps 1 and 3.
+- It is the only way to reproduce a digest made by another implementation with
+  a non-default tree parameter. Removing it would make some third-party
+  digests unreachable, which is a capability loss, not a tidy-up.
+
+**What is not evidence for it:** none of its uses in this repository sets any
+tree field. Every one of them sets only what a four-field builder would cover.
+Frequency of use argues nothing about whether an interface is right.
+
+So the resolution is to make the common case not need it, without removing it:
+
+- add `ub_init_personal(S, outlen, personal)`, matching `_init_salt_personal`'s
+  role for the one parameter every observed caller sets;
+- keep `ub_init_param` as the documented escape hatch for the two cases above;
+- stop presenting it as the ordinary path in the guide and the README.
+
+That is additive: no existing caller breaks, and the two libraries end up
+offering the same four-field common path. Tracked in `TODO.md`.
+
+**The guarantee to test.** Equal `sizeof` between the two libraries' parameter
+types proves nothing — the structs are never reinterpreted as bytes, since
+both serialize field by field. What matters is that the two serializers emit
+byte-identical 64-byte blocks from equivalent inputs. That test is the real
+unification check and is on the backlog.
+
+### Errors: a library does not panic
+
+**C** returns `int`: `UB_OK`, or a negative code from a documented enum
+(`UB_E_ARG`, `UB_E_OUTCAP`, `UB_E_GEOMETRY`, `UB_E_STATE`). Every entry point
+validates before doing work, so a rejected call has no side effects. An
+installable handler adds diagnostics without changing the return value.
+
+**Rust, as it stands, panics** in the builder: a digest length outside
+1..=64, a salt of the wrong length, and a key length mismatch are `assert!`.
+That was chosen because the values are constants at a call site, so the assert
+fires in development rather than in production.
+
+**That reasoning is not good enough for a library.** A library detects,
+mitigates where it can, reports, and lets the caller decide. A panic removes
+the decision: it unwinds through code that did not choose it, and in a
+consumer built with `panic = "abort"` it takes the process down. "The caller
+should have passed a valid length" is an argument about whose fault it is, not
+about who should handle it.
+
+The ecosystem agrees on the primary surface. RustCrypto's `blake2`, the
+standard consumers reach for, returns values from its trait API:
+
+```rust
+fn new(output_size: usize) -> Result<Self, InvalidOutputSize>
+fn new_from_slice(key: &[u8]) -> Result<Self, InvalidLength>
+```
+
+It keeps `assert!` only in the inherent `new_with_params`, a lower-level
+constructor. `blake2b_simd` asserts throughout its builder, which is the
+convention this crate copied.
+
+**Direction: move the builder to fallible constructors** — a `Params` error
+enum with the same four conditions the C side already names, and `to_state`
+returning `Result`. Panics remain acceptable only where a condition cannot be
+produced by any input, such as an internal invariant. Tracked in `TODO.md`;
+the same enum is what a batch entry point would return, so the two should be
+designed together.
+
+The contract both sides keep meanwhile: **a failed call changes nothing.** C
+validates up front; the Rust asserts fire in the builder, before a state
+exists.
+
+### Scope: what this library is and is not
+
+**In scope:** BLAKE2b, sequential mode, one digest at a time or many over a
+shared prefix.
+
+**Not in scope: BLAKE2bp and BLAKE2sp.** They are different algorithms --
+tree modes producing different digests from the same input -- not faster
+implementations of BLAKE2b. Nothing here will grow into them.
+
+This matters because one optimisation direction sounds like it crosses the
+line and does not. **Multi-message SIMD** -- hashing several independent
+BLAKE2b messages in the lanes of one vector register -- is a *kernel
+technique*, and every message still gets a plain BLAKE2b digest. It is in
+scope, and is the natural implementation of a batch entry point. BLAKE2bp
+uses the same lane trick but then combines the lanes into one digest, which
+changes the output. That is the distinction: same technique, different
+algorithm.
+
+### Why alignment is a Rust worry and not a C one
+
+The Rust state was 224 B before the counter change, because `u128` has
+target-dependent alignment: 8 on x86-64 before rustc 1.77, 16 from 1.77 on,
+and 16 on aarch64 throughout. Same source, different size per target and per
+compiler version.
+
+C has no equivalent exposure **in this state** because every field is a
+fixed-width integer or an array of them: `uint64_t`, `uint8_t[]`. There is no
+C type in `struct ub_state` whose alignment varies by target. C would have
+exactly the same problem if the state held a `size_t`, a pointer, a `long`, or
+a `__int128` -- and it did: `buflen`/`outlen` were `size_t` at the initial
+commit, giving 240 on LP64 against 232 on ILP32. Narrowing them to `uint8_t`
+fixed it for the same reason dropping `u128` fixed Rust.
+
+So it is not that C is immune. It is that the C state was already audited for
+ABI-dependent field types and the Rust one had not been. The C rule is stated
+under *State* above; `tests/abi.rs` now carries the Rust one.
+
+## Running this work on x86-64
+
+Everything measured here is aarch64 on one machine. Several
+results are *architecture* results, not algorithm results, and are expected to
+come out differently here. This file is the whole procedure, so it does not
+have to be reconstructed.
+
+### First: much of this runs on an Apple-silicon Mac already
+
+Before provisioning an x86-64 box, note that the AVX2 kernel **builds and runs
+on Apple silicon**: Apple clang cross-compiles with
+`--target=x86_64-apple-macos13`, and Rosetta 2 executes AVX2 despite not
+advertising it in CPUID. `make check-avx2-rosetta` runs the published vectors
+and the API suite that way, verified.
+
+What still needs a real x86-64 host:
+
+- **the oracle suites** -- they link libsodium, and a Homebrew libsodium is
+  arm64, so it cannot go into an x86-64 binary;
+- **every timing** -- Rosetta is emulation; no speed number from it means
+  anything;
+- **the scalar x86-64 codegen questions** below, which are about what a native
+  compiler emits.
+
+### Setup
+
+```sh
+sudo apt install build-essential libsodium-dev python3
+git clone <this repo> && cd uniblake
+make check SODIUM=/usr          # must pass before any measurement
+```
+
+For the Rust comparison:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+cd ../uniblake-rs && cargo test
+```
+
+### What to run
+
+```sh
+make check SODIUM=/usr          # correctness first, always
+make kernel-stats               # what the compiled kernel does
+make kernel-stats-arch          # how to read those counts on x86 (read this)
+make bench-phases               # where a digest's time goes
+make bench-compare SODIUM=/usr  # against libsodium
+make check-avx2 SODIUM=/usr     # AVX2 correctness -- never run here
+make bench-avx2  SODIUM=/usr    # AVX2 speed -- never run anywhere
+```
+
+Then in `uniblake-rs`:
+
+```sh
+cargo run --release --example compare
+python3 ../uniblake/tools/ab_compare.py \
+    ../uniblake/build/ub_cmp target/release/examples/compare \
+    --runs 21 --grep '^400000,'
+```
+
+Never compare a single A run against a single B run: see
+*Reading a performance number*.
+
+### What is expected to differ, and why
+
+| result | aarch64 | x86-64 expectation |
+|---|---|---|
+| rotate count in `compress` | 380 + 4 fused | **384, 0 fused** — x86 has no shifted-operand `xor`, so the last-round rotate cannot ride along with the output XOR |
+| last-round rotate deferral | free, compiler already does it | **untested and plausibly a real win** — the four rotates are real `rorq` there |
+| AVX2 `ROT63` | n/a | 3 instructions (`vpsrlq`+`vpaddq`+`vpor`) against 1 for the others; deferring the last round's removes the most expensive rotate in the kernel |
+| callee-saved registers | 10 (x19-x28) | 6 (rbx, rbp, r12-r15) — the spill subtraction is smaller |
+| instruction counts | comparable | **not comparable** — x86 folds loads into arithmetic |
+
+### The three open experiments
+
+1. **Last-round rotate deferral, x86-64 scalar.** Apply the deferral to the
+   final round's *diagonal* half only (the column half's `b` words are
+   overwritten by the diagonal step) and fold the rotate into the output XOR.
+   Verify with `make check`, measure with `tools/ab_compare.py`. On aarch64
+   this produced byte-identical assembly; here it should not.
+
+2. **Last-round `ROT63` deferral, AVX2.** Same idea in
+   `backends/compress_avx2.c`. This is the most promising of the three:
+   `ROT63` is 3 instructions against 1 for the other rotations, and the saving
+   applies across four lanes on the final round's critical path.
+
+3. **Confirm or refute the whole aarch64 table.** Every row of
+   *How this kernel behaves* is one machine and one compiler. gcc and clang
+   both, `-O2` and `-O3`.
+
+### Prompt to use
+
+Paste this verbatim:
+
+> Read this document's *Running this work on x86-64* and *How this kernel
+> behaves* sections before touching anything.
+>
+> This is x86-64 Linux. Every performance result currently in the docs was
+> measured on aarch64 (Apple M4 Pro, clang) and several are architecture
+> results that should come out differently here — the doc says which and why.
+>
+> Do, in order:
+> 1. `make check SODIUM=/usr` and confirm it passes. Do not measure anything
+>    until it does.
+> 2. `make kernel-stats` and `make kernel-stats-arch`. The counting tool
+>    currently only parses aarch64; extend it for x86-64 per the notes it
+>    prints, and add the corresponding cases to its `--self-test`. Report the
+>    rotate count and how many rotates are fused into a consumer — the
+>    aarch64 answer is 380 + 4 fused, and x86 is expected to be 384 + 0.
+> 3. `make bench-phases` and `make bench-compare SODIUM=/usr`, then the Rust
+>    comparison and `tools/ab_compare.py` as shown in this file.
+> 4. Run the three open experiments listed above.
+>
+> Rules, which exist because they were violated on aarch64:
+> - Use `tools/ab_compare.py` for any A/B claim. Never compare single runs,
+>   never batch all-A then all-B. If its verdict is UNRESOLVED, write
+>   "unresolved at N pairs", never "no change" or "within noise".
+> - Quote the confidence interval with every difference, not a bare median.
+> - Do not report a code-shape conclusion without the assembly counts that
+>   explain it, and do not assert a mechanism you have not tested — an
+>   aliasing explanation was proposed on aarch64 and disproved by adding
+>   `restrict`.
+> - Anything you measure goes into this document as a mechanism, with
+>   the `make` target that reproduces it. One-off scripts in `/tmp` do not
+>   count as results.

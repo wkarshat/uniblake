@@ -259,11 +259,11 @@ Nothing needs bash installed.
 #### What a pass looks like
 
 ```
-blake2-alias: checks=1218 fails=0 -> PASS
-core: checks=630 fails=0 -> PASS
-prefix: checks=45531 fails=0 -> PASS
-api: checks=155 fails=0 -> PASS
-compat: checks=56 fails=0 -> PASS
+blake2-alias: checks=... fails=0 -> PASS
+core:         checks=... fails=0 -> PASS
+prefix:       checks=... fails=0 -> PASS
+api:          checks=... fails=0 -> PASS
+compat:       checks=... fails=0 -> PASS
 ```
 
 Any `FAIL`, or a nonzero exit, means stop: a wrong digest is not a platform
@@ -280,6 +280,7 @@ Each document owns a question and carries that topic whole.
 | [docs/GUIDE.md](docs/GUIDE.md) | *how to call it* — recipes, interface reference, sizing rules, adapters, the C++ wrapper | writing calling code |
 | [docs/INTERNALS.md](docs/INTERNALS.md) | *how it works* — state, the compression kernel, porting, measurements | replacing a kernel or porting |
 | [docs/INTEGRATING.md](docs/INTEGRATING.md) | *how to adopt it* — swapping the hash in an existing codebase, in a validated order | migrating a consumer |
+| [TODO.md](TODO.md) | *what is in flight* — backlog, active work, and every measured figure with its conditions | checking status, or looking up a number |
 
 ### What does not go in these documents
 
@@ -290,8 +291,11 @@ without anything failing to signal it.
 - **History and provenance.** Contributor names, commit dates, upstream
   maintenance status. License and pin lines on vendored files are the
   exception.
-- **Rejected and parked work.** `docs/INTERNALS.md` keeps only the short list
-  that stops a reader repeating a measured mistake.
+- **Rejected and parked work, and all figures.** These live in `TODO.md`,
+  which is pruned every pass. A measurement is true of one machine, one
+  compiler and one tree state; keeping figures out of the permanent documents
+  is what stops them rotting silently. `docs/INTERNALS.md` keeps mechanisms
+  and the short list that stops a reader repeating a measured mistake.
 - **Other algorithms.** Named once in `docs/UniBlake.md` as a scope boundary,
   never compared.
 - **Named downstream projects.** A consumer's domain is its own; examples

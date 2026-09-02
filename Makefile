@@ -160,6 +160,26 @@ avx2-check:
 	     exit 1 ;; \
 	esac
 
+# AVX2 under Rosetta 2 on an Apple-silicon host.
+#
+# Apple clang is a cross-compiler: --target=x86_64-apple-macos13 produces an
+# x86-64 binary, and Rosetta 2 executes AVX2 even though it does not advertise
+# it in CPUID. So the vector kernel can be built AND run here.
+#
+# Limited to the suites that need no oracle: Homebrew's libsodium is arm64, so
+# anything linking it cannot be part of an x86-64 binary. That leaves the
+# published vectors and the API suite, which is enough to establish
+# correctness -- it is NOT a speed measurement, because Rosetta is emulation.
+X86TARGET ?= x86_64-apple-macos13
+check-avx2-rosetta: | $(BUILD)
+	@case "$$(uname -m)" in arm64) ;; \
+	  *) echo "check-avx2-rosetta is for an Apple-silicon host; use check-avx2"; exit 0 ;; esac; \
+	for t in test_kat test_api; do \
+	  $(CC) --target=$(X86TARGET) $(AVX2FLAGS) $(CFLAGS) $(INC) tests/$$t.c \
+	    src/core.c src/const.c src/prefix.c backends/compress_avx2.c \
+	    -o $(BUILD)/ub_rose_$$t && $(BUILD)/ub_rose_$$t || exit 1; \
+	done
+
 check-avx2: avx2-check sodium-check | $(BUILD)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(AVX2FLAGS) $(INC) $(SODINC) tests/test_core.c \

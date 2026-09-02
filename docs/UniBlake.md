@@ -108,6 +108,18 @@ output construction, and the tree modes are different functions, not options;
 the scope is settled rather than open. A caller who wants one of them wants a
 different library.
 
+**No parallel tree modes.** BLAKE2bp and BLAKE2sp are distinct algorithms --
+tree modes producing different digests from the same input -- not faster
+BLAKE2b. Nothing here grows into them, and no parameter, entry point or kernel
+is shaped to leave room for one.
+
+One nearby technique is easily confused with them and is *not* excluded:
+multi-message SIMD, where several independent BLAKE2b messages occupy the lanes
+of one vector register. Every message still receives a plain BLAKE2b digest;
+only the kernel is shared. BLAKE2bp uses the same lane trick and then combines
+the lanes, which changes the output. Same technique, different algorithm.
+Whether this library adopts the technique is an open question, not a commitment.
+
 **No shared segment except at the start.** This is inherent, not a shortcut:
 the state depends on every byte absorbed so far, so in `varying || fixed` the
 shared part cannot be precomputed. Only `fixed || varying` benefits, and the
