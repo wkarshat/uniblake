@@ -466,6 +466,19 @@ or spilled to the stack, and pages written to swap, are outside its reach.
 
 Verified zeroed at `-O2`, `-O3` and `-Os` on two compilers.
 
+### Running, recording and reading benchmarks
+
+Targets, recording and the viewer are specified in `docs/UniBench.md`.
+
+Two things that belong here rather than there. Most targets need libsodium as
+a test oracle: the library links nothing, and the oracle is compiled into the
+benchmark binaries only, so uniblake can be timed against an independent
+implementation on the same geometry. `bench-phases` and `bench-isa` need none.
+
+And `bench_prefix.c` has no warmup, unlike the other two harnesses, so its
+first rep pays the process startup transient. Prefer `bench-compare` for
+anything recorded.
+
 ### Reading a performance number
 
 A figure is meaningless without its machine. Code changes reorder between CPU

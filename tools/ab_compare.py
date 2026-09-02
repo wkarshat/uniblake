@@ -55,7 +55,7 @@ def main():
     print(f"A  {a_bin}   median {ma:7.2f}   spread {max(A)-min(A):.2f}")
     print(f"B  {b_bin}   median {mb:7.2f}   spread {max(B)-min(B):.2f}")
     print(f"paired difference B-A    {d:+.2f}   95% CI [{lo:+.2f}, {hi:+.2f}]")
-    print(f"harness resolution       ~{spread:.2f} ns (worst within-variant spread)")
+    print(f"harness resolution       {spread:.2f} ns (worst within-variant spread)")
     print()
     if lo <= 0 <= hi:
         print(f"VERDICT: UNRESOLVED. The interval spans zero, so this harness at")
