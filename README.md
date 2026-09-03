@@ -434,6 +434,51 @@ compat:       checks=... fails=0 -> PASS
 Any `FAIL`, or a nonzero exit, means stop: a wrong digest is not a platform
 quirk. Report the machine, compiler and version with the failure.
 
+#### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push and pull request, and can be
+triggered by hand from the Actions tab.
+
+| job | what it covers | needs |
+|---|---|---|
+| `nosodium` | `make check-nosodium` on Linux and macOS arm64 | nothing |
+| `consumer-convention` | the build as a parent build system invokes it | nothing |
+| `oracle` | `check`, `check-negative`, `check-sanitize` | `libsodium-dev` |
+| `standards` | gcc and clang across c99, c11, c17 under `-Werror` | nothing |
+| `windows-cross` | mingw-w64 build, `check-build`, `check-wine` | mingw-w64, wine |
+
+`consumer-convention` is the job worth understanding. It builds the way a
+Bitcoin-style `depends` tree does -- `BUILD` exported to the environment, no
+`BUILD=` argument -- and asserts the archive lands in `build/`. That is the
+invocation that silently redirected the output directory before the knob was
+renamed to `UB_BUILD`, and neither `make check` (which runs in a clean
+environment) nor the documented cross build (which passes the directory
+explicitly) exercises it. A library is used by build systems it does not
+control; this is the only job that tests that surface.
+
+**Every job carries `continue-on-error`, so nothing here gates a merge.** A
+GitHub outage, a runner image change or a distro package moving cannot block
+development. The consequence is that the run-level badge is always green: read
+the per-job results, not the overall conclusion.
+
+```
+gh run list  --repo wkarshat/uniblake --limit 5
+gh run view  --repo wkarshat/uniblake            # per-job status
+gh run view  --repo wkarshat/uniblake --log-failed
+```
+
+Nothing in CI is unavailable locally, and the local run is the faster loop:
+
+```
+make check-nosodium                                   # 2930 checks, no dependencies
+make check SODIUM=/usr && make check-sanitize SODIUM=/usr
+env BUILD=x86_64-pc-linux-gnu make && test -f build/libuniblake.a
+```
+
+No `bench-*` target runs in CI. Runner timings are noise; `measurements.tsv`
+records real hardware, and a benchmark belongs on a machine whose
+configuration is known.
+
 ## Documentation
 
 Each document owns a question and carries that topic whole.
