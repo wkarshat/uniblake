@@ -177,7 +177,7 @@ Measured on the M4 Pro, prefix 140 B, digest 50 B:
 | 8 | 12.3 | 6.8x |
 
 Close to linear, which is what an embarrassingly parallel range should give.
-Reproduce with `make bench-threads THREADS=<n>`.
+Reproduce with `make bench-threads UB_THREADS_N=<n>`.
 
 Two details in the implementation worth keeping in a production version:
 arguments are validated once, before any thread starts, so a bad call fails
