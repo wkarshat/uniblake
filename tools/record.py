@@ -188,7 +188,35 @@ def parse_solve_tsv(text):
             yield f"solve.equihash {f[0]}", float(f[2]), "s", (f[1], "")
             yield f"nsols.equihash {f[0]}", float(f[3]), "count", (f[1], "")
 
+def parse_rs_bench(text):
+    """examples/bench.rs and examples/bulk.rs, free-form lines.
+
+      prefix=140B digest=50B N=200000 reps=7 (median ns/digest)
+        uniblake          167.2
+        blake2b_simd      135.0   ratio 1.24x
+      bulk 1 MiB  uniblake 859 MB/s   blake2b_simd 1241 MB/s   ratio 1.44x
+    """
+    n = reps = ""
+    for line in text.splitlines():
+        m = re.search(r"N=(\d+)\s+reps=(\d+)", line)
+        if m:
+            n, reps = m.group(1), m.group(2); continue
+        m = re.match(r"\s*uniblake\s+([\d.]+)\s*$", line)
+        if m:
+            yield "leaf.blake2b", float(m.group(1)), "ns/digest", (n, reps); continue
+        m = re.match(r"\s*blake2b_simd\s+([\d.]+)", line)
+        if m:
+            yield "leaf.blake2b reference", float(m.group(1)), "ns/digest", (n, reps); continue
+        m = re.match(r"\s*bulk\s+([\d.]+)\s*([KMG]?)i?B\s+uniblake\s+([\d.]+)\s+MB/s"
+                     r"\s+blake2b_simd\s+([\d.]+)\s+MB/s", line)
+        if m:
+            mult = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3}[m.group(2)]
+            b = str(int(float(m.group(1)) * mult))
+            yield "bulk.blake2b", float(m.group(3)), "MB/s", (b, reps)
+            yield "bulk.blake2b reference", float(m.group(4)), "MB/s", (b, reps)
+
 PARSERS = {"bench-phases": parse_phases, "bench-compare": parse_compare,
+           "rs-bench": parse_rs_bench,
            "bench-compare-avx2": parse_compare, "solve-timing": parse_solve_tsv}
 
 # Harnesses that link no oracle. Recording an oracle version against one of
