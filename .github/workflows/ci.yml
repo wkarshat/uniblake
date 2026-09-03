@@ -1,0 +1,98 @@
+# Permissive by design. Nothing here is a required check: CI reports, it does
+# not gate. Every job carries continue-on-error so a GitHub outage, a runner
+# image change or a distro package moving cannot block development. The signal
+# is the run summary, not a red X on the branch.
+#
+# The same checks run locally with no GitHub at all:
+#   make check-nosodium            # no dependencies
+#   make check SODIUM=/usr         # adds the libsodium oracle
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # No dependencies at all: the published KAT vectors, the blake2b alias suite,
+  # the public-API suite and the standards sweep. ~2930 checks in about 3s.
+  # If only one job ever runs, it should be this one.
+  nosodium:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: make check-nosodium
+
+  # The bug this repo actually hit: a Bitcoin-style depends tree exports BUILD
+  # as the build triplet and invokes make with no BUILD= argument. Under the
+  # old `BUILD ?= build` the archive silently landed in ./<triplet>/ and the
+  # consumer staged an empty prefix. Neither `make check` (clean environment)
+  # nor the documented cross build (passes the directory explicitly) covers
+  # this -- only calling make the way a parent build system does.
+  consumer-convention:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: environment BUILD must not redirect the output directory
+        run: |
+          env BUILD=x86_64-pc-linux-gnu HOST=x86_64-pc-linux-gnu make
+          test -f build/libuniblake.a
+          test ! -d x86_64-pc-linux-gnu
+      - name: the old spelling is an error, not a silent no-op
+        run: |
+          make BUILD=whatever 2>&1 | grep -q 'renamed to UB_BUILD'
+
+  # Conformance against the oracle, plus the sanitizers. core, prefix, compat
+  # and negative compare against libsodium and cannot be built without it.
+  # Sanitizers are here rather than nightly because they are measurably cheap:
+  # check-sanitize runs in ~3s, no slower than the plain suite.
+  oracle:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libsodium-dev
+      - run: make check SODIUM=/usr
+      - run: make check-negative SODIUM=/usr
+      - run: make check-sanitize SODIUM=/usr
+
+  # The library targets C11 but keeps a C99 fallback in the allocation path.
+  # -Werror is the point: nothing else proves that path still compiles clean
+  # under both compilers.
+  standards:
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+        std: [c99, c11, c17]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          make UB_BUILD=build-${{ matrix.cc }}-${{ matrix.std }} CC=${{ matrix.cc }} \
+            CFLAGS="-O2 -std=${{ matrix.std }} -Wall -Wextra -Wpedantic -Werror"
+
+  # Windows PE output from a Linux host, run under wine. These are verbatim the
+  # README commands, so the job doubles as a check that the documentation works.
+  windows-cross:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 wine64
+      - run: |
+          make UB_BUILD=build-win CC=x86_64-w64-mingw32-gcc \
+               AR=x86_64-w64-mingw32-ar EXE=.exe
+      - run: |
+          make check-build UB_BUILD=build-win CC=x86_64-w64-mingw32-gcc EXE=.exe
+      - run: make check-wine UB_BUILD=build-win

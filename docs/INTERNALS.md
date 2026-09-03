@@ -589,15 +589,15 @@ strictest available compiler says about it.
 
 ### Driving a build matrix
 
-Every target takes `CC`, `AR`, `BUILD` and `EXE`, so a matrix is a loop over
-those rather than a separate build system. `BUILD` is what keeps the runs from
+Every target takes `CC`, `AR`, `UB_BUILD` and `EXE`, so a matrix is a loop over
+those rather than a separate build system. `UB_BUILD` is what keeps the runs from
 colliding: each configuration gets its own output tree and none invalidates
 another.
 
 ```sh
 for cc in cc gcc-16 x86_64-w64-mingw32-gcc i686-w64-mingw32-gcc; do
   for std in c99 c11; do
-    make BUILD=build-$cc-$std CC=$cc CFLAGS="-O2 -std=$std -Wall -Wextra -Wpedantic"
+    make UB_BUILD=build-$cc-$std CC=$cc CFLAGS="-O2 -std=$std -Wall -Wextra -Wpedantic"
   done
 done
 ```
@@ -725,7 +725,7 @@ rather than merely compile, QEMU. Compile-only costs one package and one
 ### Incremental builds
 
 Objects carry compiler-generated header dependencies (`-MMD -MP`, emitted as
-`.d` files beside them under `BUILD`). Editing `src/internal.h` or a public
+`.d` files beside them under `UB_BUILD`). Editing `src/internal.h` or a public
 header rebuilds every object that included it.
 
 This matters more than usual here: `internal.h` defines `struct ub_state`, so

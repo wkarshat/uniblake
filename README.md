@@ -99,6 +99,44 @@ itself neither needs nor references it. The optional `compat/ub_sodium.h`
 maps libsodium's *function names* onto uniblake calls for callers migrating,
 which is an adapter over this library's own code, not a use of theirs.
 
+#### Which targets need it
+
+Two thirds of the test programs need no oracle at all. `make check-nosodium`
+runs exactly those and is the entry point for a machine with nothing
+installed -- roughly 2930 checks, no external dependency:
+
+| target | oracle | what it checks |
+|---|---|---|
+| `check-kat` | no | 1536 published RFC 7693 / BLAKE2 vectors |
+| `check-alias` | no | 1218 checks of `compat/ub_sodium.h` name mapping |
+| `check-build` | no | a suite compiles without running (cross builds) |
+| `check-portable` | no | `src/` compiles clean as c99 and c11 |
+| `check-nosodium` | no | the four above, plus the 176-check API suite |
+| `check` | **yes** | the above plus core, prefix and compat conformance |
+| `check-negative` | **yes** | a deliberately wrong kernel *must* be rejected |
+| `check-backends` | **yes** | each SIMD kernel against the oracle |
+| `check-sanitize` | **yes** | core and prefix under ASan/UBSan |
+| `check-wipe-modes` | **yes** | secret wiping compiled in and out |
+| `bench*` | **yes** | timing against the reference |
+
+The dependency is inherent where it appears. `tests/test_core.c`,
+`test_prefix.c`, `test_negative.c` and `compat/test_compat.c` call
+`crypto_generichash_blake2b_*` directly to compare digest against digest;
+there is nothing to compare against without it. `check-negative` is the
+sharpest case -- it exists to prove the oracle comparison can fail, so
+removing the oracle would make it vacuous.
+
+`tests/test_kat.c` and `test_api.c` mention libsodium only in comments. The
+KAT suite checks published vectors, which are the specification rather than
+another implementation, and the API suite checks this library's own contracts
+-- return codes, state reuse, argument validation. Neither links it.
+
+The x86 SIMD kernel is a separate matter: `backends/vendor/libsodium/` holds
+nine files copied unmodified from libsodium at pin `9608bca8` (ISC), of which
+only the AVX2 path is built, and only by `backends/compress_avx2.c`. That is
+vendored source under `backends/`, never part of `src/`, and it does not enter
+the shipped library. See `backends/vendor/libsodium/README.md`.
+
 The implementation follows RFC 7693 and the BLAKE2 authors' reference package.
 Where a constant is shared with other implementations -- the SIGMA schedule,
 the IV, the rotation amounts -- it is shared because the specification fixes
@@ -124,7 +162,7 @@ make bench SODIUM=<prefix>                  # ns/digest for this machine
 make bench-neon SODIUM=<prefix>             # same, with the NEON kernel (aarch64)
 make check-avx2 SODIUM=<prefix>             # AVX2 kernel conformance (x86-64)
 make bench-avx2 SODIUM=<prefix>             # same, measured
-make bench-threads THREADS=<n> SODIUM=<..>  # same, with the range split across threads
+make bench-threads UB_THREADS_N=<n> SODIUM=<..>  # same, with the range split across threads
 make probe                                  # CPU identity; report it with any figure
 ```
 
@@ -290,13 +328,13 @@ it and MinGW diverge often enough that one passing does not imply the other.
 
 Produces Windows PE binaries on a Linux or macOS host via MinGW-w64. The library
 links nothing, so it cross-compiles without a target sysroot. Give the cross build its
-own `BUILD` so it sits beside the native one; see "Two toolchains, one checkout".
+own `UB_BUILD` so it sits beside the native one; see "Two toolchains, one checkout".
 
 ```
 sudo apt install gcc-mingw-w64-x86-64          # macOS: brew install mingw-w64
 
-make BUILD=build-win CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar EXE=.exe
-make check-build BUILD=build-win CC=x86_64-w64-mingw32-gcc EXE=.exe
+make UB_BUILD=build-win CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar EXE=.exe
+make check-build UB_BUILD=build-win CC=x86_64-w64-mingw32-gcc EXE=.exe
 ```
 
 `check-build` compiles the suite without running it. `check-alias` builds and
@@ -316,7 +354,7 @@ Windows target without a Windows machine:
 
 ```
 sudo apt install wine64
-make check-wine BUILD=build-win
+make check-wine UB_BUILD=build-win
 blake2-alias: checks=1218 fails=0 -> PASS
 ```
 
@@ -338,15 +376,15 @@ has been run.
 #### Two toolchains, one checkout
 
 Everything a build produces -- objects, the archive, test binaries -- goes
-under `BUILD`. Nothing is written beside the sources, so a native build and a
-cross build coexist in one clone; give each its own `BUILD` and they never
+under `UB_BUILD`. Nothing is written beside the sources, so a native build and a
+cross build coexist in one clone; give each its own `UB_BUILD` and they never
 touch. One repository, one checkout, two output trees:
 
 ```
 make                                          # -> build/
 make check SODIUM=/usr                        # native suites
 
-make BUILD=build-win CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar EXE=.exe
+make UB_BUILD=build-win CC=x86_64-w64-mingw32-gcc AR=x86_64-w64-mingw32-ar EXE=.exe
 ```
 
 Pass the variables on each command line rather than collecting them in a shell
@@ -354,15 +392,15 @@ variable; `make` needs them as its own arguments.
 
 Neither rebuilds nor invalidates the other, and `make` will not reuse the
 wrong toolchain's objects. `make clean` removes only the tree named by
-`BUILD`, so clean each separately:
+`UB_BUILD`, so clean each separately:
 
 ```
 make clean                       # removes build/
-make clean BUILD=build-win       # removes build-win/
+make clean UB_BUILD=build-win    # removes build-win/
 ```
 
 `build/` and `build-*/` are gitignored. Use a second clone only if you want
-different *sources* -- for the same sources, a second `BUILD` is enough.
+different *sources* -- for the same sources, a second `UB_BUILD` is enough.
 
 #### Variables
 
@@ -371,7 +409,13 @@ different *sources* -- for the same sources, a second `BUILD` is enough.
 | `SODIUM` | `/usr/local` | libsodium is elsewhere |
 | `EXE` | empty | executables need a suffix (native Windows) |
 | `CC`, `AR` | `cc`, `ar` | cross-compiling, or selecting a second compiler |
-| `BUILD` | `build` | building with a second toolchain from one checkout |
+| `UB_BUILD` | `build` | building with a second toolchain from one checkout |
+
+`UB_BUILD` carries a prefix because the obvious name, `BUILD`, is what
+Bitcoin-style `depends` trees export as the build *triplet* to every package's
+sub-make. Sharing the name let that value silently redirect the output
+directory. Passing `BUILD=` on the command line is an error that names the
+replacement; an inherited `BUILD` in the environment is ignored.
 
 The Makefile recipes are POSIX shell -- no bash extensions -- so they run
 under whatever `/bin/sh` a platform provides, including `dash` and MSYS2.
