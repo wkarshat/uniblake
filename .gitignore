@@ -17,6 +17,9 @@ throw/
 .cursor
 .vscode
 
+# just here just now
+*.tsv
+*.csv
 *.bak
 *.rej
 *.orig

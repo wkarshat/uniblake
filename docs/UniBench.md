@@ -34,6 +34,15 @@ Each of these produced a wrong published conclusion before the guard existed.
                        282-vs-185 ns gap was attributed to a libsodium
                        version; it was -O1 against -O2 of one source.
 
+    packaged oracle    A distro or Homebrew binary is built for the widest
+                       target, not the host. A poured libsodium 1.0.22 bottle
+                       measured 13.2% slower on leaf and 11.3% slower on bulk
+                       than the same version built -O3 from source on the same
+                       machine -- enough to turn a 2.05x result into 2.36x.
+                       oracle_flags cannot express this: both are "-O3" as far
+                       as the recorder knows. State the oracle's PROVENANCE in
+                       note (bottle / distro / built-here), not only its flags.
+
     false oracle       record.py rejects --oracle-version on a run that links
                        none, rather than recording a dependency the binary
                        does not have.
